@@ -165,10 +165,22 @@ impl Cpu {
             0x24 => self.execute_bit(self.get_addr_zero(inst.arguments[0]), 3),
             0x2C => self.execute_bit(self.get_addr_absolute(inst.get_absolute_addr()), 4),
 
-            0x18 => self.set_flag_carry(false),
-            0xD8 => self.set_flag_decimal(false),
-            0x58 => self.set_flag_interrupt(false),
-            0xB8 => self.set_flag_overflow(false),
+            0x18 => {
+                self.set_flag_carry(false);
+                self.cycle += 2;
+            }
+            0xD8 => {
+                self.set_flag_decimal(false);
+                self.cycle += 2;
+            }
+            0x58 => {
+                self.set_flag_interrupt(false);
+                self.cycle += 2;
+            }
+            0xB8 => {
+                self.set_flag_overflow(false);
+                self.cycle += 2;
+            }
 
             0xC9 => self.execute_cmp(inst.arguments[0], 2),
             0xC5 => self.execute_cmp(self.get_addr_zero(inst.arguments[0]), 3),
@@ -421,6 +433,128 @@ impl Cpu {
                 self.cycle += 6;
             }
 
+            0xE9 => self.execute_sbc(inst.arguments[0], 2),
+            0xE5 => self.execute_sbc(self.get_addr_zero(inst.arguments[0]), 3),
+            0xF5 => self.execute_sbc(self.get_addr_zero_x(inst.arguments[0]), 4),
+            0xED => self.execute_sbc(self.get_addr_absolute(inst.get_absolute_addr()), 4),
+            0xFD => self.execute_sbc(
+                self.get_addr_absolute_x(inst.get_absolute_addr()),
+                increment_if_crossed(4, inst.get_absolute_addr() as usize + self.index_x as usize),
+            ),
+            0xF9 => self.execute_sbc(
+                self.get_addr_absolute_y(inst.get_absolute_addr()),
+                increment_if_crossed(4, inst.get_absolute_addr() as usize + self.index_y as usize),
+            ),
+            0xE1 => self.execute_sbc(self.get_addr_indexed_indirect(inst.arguments[0]), 6),
+            0xF1 => self.execute_sbc(
+                self.get_addr_indirect_indexed(inst.arguments[0]),
+                increment_if_crossed(5, self.get_addr_indirect_indexed_index(inst.arguments[0])),
+            ),
+
+            0x38 => {
+                self.set_flag_carry(true);
+                self.cycle += 2;
+            }
+            0xF8 => {
+                self.set_flag_decimal(true);
+                self.cycle += 2;
+            }
+            0x78 => {
+                self.change_interrupt_disable_flag = 1;
+                self.cycle += 2;
+            }
+
+            0x85 => self.execute_st(
+                self.get_addr_zero_index(inst.arguments[0]) as u16,
+                self.accumulator,
+                3,
+            ),
+            0x95 => self.execute_st(
+                self.get_addr_zero_x_index(inst.arguments[0]) as u16,
+                self.accumulator,
+                4,
+            ),
+            0x8D => self.execute_st(inst.get_absolute_addr(), self.accumulator, 4),
+            0x9D => self.execute_st(
+                inst.get_absolute_addr() + self.index_x as u16,
+                self.accumulator,
+                5,
+            ),
+            0x99 => self.execute_st(
+                inst.get_absolute_addr() + self.index_y as u16,
+                self.accumulator,
+                5,
+            ),
+            0x81 => self.execute_st(
+                self.get_addr_indexed_indirect_index(inst.arguments[0]) as u16,
+                self.accumulator,
+                6,
+            ),
+            0x91 => self.execute_st(
+                self.get_addr_indirect_indexed_index(inst.arguments[0]) as u16,
+                self.accumulator,
+                6,
+            ),
+
+            0x86 => self.execute_st(
+                self.get_addr_zero_index(inst.arguments[0]) as u16,
+                self.index_x,
+                3,
+            ),
+            0x96 => self.execute_st(
+                self.get_addr_zero_y_index(inst.arguments[0]) as u16,
+                self.index_x,
+                4,
+            ),
+            0x8E => self.execute_st(inst.get_absolute_addr(), self.index_x, 4),
+
+            0x84 => self.execute_st(
+                self.get_addr_zero_index(inst.arguments[0]) as u16,
+                self.index_y,
+                3,
+            ),
+            0x94 => self.execute_st(
+                self.get_addr_zero_x_index(inst.arguments[0]) as u16,
+                self.index_y,
+                4,
+            ),
+            0x8C => self.execute_st(inst.get_absolute_addr(), self.index_y, 4),
+
+            0xAA => {
+                self.index_x = self.accumulator;
+                self.set_flag_zero_by_val(self.index_x);
+                self.set_flag_negative_by_val(self.index_x);
+                self.cycle += 2;
+            }
+            0xA8 => {
+                self.index_y = self.accumulator;
+                self.set_flag_zero_by_val(self.index_y);
+                self.set_flag_negative_by_val(self.index_y);
+                self.cycle += 2;
+            }
+            0xBA => {
+                self.index_x = self.stack_pointer;
+                self.set_flag_zero_by_val(self.index_y);
+                self.set_flag_negative_by_val(self.index_y);
+                self.cycle += 2;
+            }
+            0x8A => {
+                self.accumulator = self.index_x;
+                self.set_flag_zero_by_val(self.accumulator);
+                self.set_flag_negative_by_val(self.accumulator);
+                self.cycle += 2;
+            }
+            0x9A => {
+                self.stack_pointer = self.index_x;
+                self.cycle += 2;
+            }
+            0x98 => {
+                self.accumulator = self.index_y;
+                self.set_flag_zero_by_val(self.accumulator);
+                self.set_flag_negative_by_val(self.accumulator);
+                self.cycle += 2;
+            }
+
             _ => panic!("Unknown op code received: {}", inst.op_code),
         };
         self.program_counter += inst.size as u16
@@ -589,6 +723,22 @@ impl Cpu {
         self.cycle += cycles;
     }
 
+    fn execute_sbc(&mut self, value: u8, cycles: u32) {
+        let acc: u8 = self.accumulator;
+        let result: i16 = acc as i16 + (!value) as i16 + (self.get_flag_carry() as u8) as i16;
+        self.accumulator = (result & 0xFF) as u8;
+        self.set_flag_carry(!(result < 0));
+        self.set_flag_zero(result == 0);
+        self.set_flag_overflow((result ^ acc as i16) & (result & !value as i16) & 0x80 == 0x80);
+        self.set_flag_negative_by_val(self.accumulator);
+        self.cycle += cycles;
+    }
+
+    fn execute_st(&mut self, addr: u16, value: u8, cycles: u32) {
+        self.memory[addr as usize] = value;
+        self.cycle += cycles;
+    }
+
     fn push(&mut self, val: u8) {
         self.memory[self.stack_pointer as usize + 0x0100] = val;
         self.stack_pointer -= 1;
@@ -680,14 +830,19 @@ impl Cpu {
     }
     /// (Indirect,X)
     fn get_addr_indexed_indirect(&self, arg: u8) -> u8 {
-        self.memory[self.memory[((arg + self.index_x) & 0xFF) as usize] as usize
+        self.memory[self.get_addr_indexed_indirect_index(arg)]
+    }
+    /// (Indirect,X)
+    fn get_addr_indexed_indirect_index(&self, arg: u8) -> usize {
+        self.memory[((arg + self.index_x) & 0xFF) as usize] as usize
             + (self.memory[((arg + self.index_x + 1) & 0xFF) as usize] as usize)
-            << 8]
+            << 8
     }
     /// (Indirect),Y
     fn get_addr_indirect_indexed(&self, arg: u8) -> u8 {
         self.memory[self.get_addr_indirect_indexed_index(arg)]
     }
+    /// (Indirect),Y
     fn get_addr_indirect_indexed_index(&self, arg: u8) -> usize {
         self.memory[arg as usize] as usize + (self.memory[(arg as usize + 1) & 256] as usize)
             << 8 + self.index_y as usize
