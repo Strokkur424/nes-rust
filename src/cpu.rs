@@ -199,6 +199,64 @@ impl Cpu {
             0xC4 => self.execute_cmy(self.get_addr_zero(inst.arguments[0]), 2),
             0xCC => self.execute_cmy(self.get_addr_absolute(inst.get_absolute_addr()), 4),
 
+            0xC6 => self.execute_dec(self.get_addr_zero_index(inst.arguments[0]) as u16, 5),
+            0xD6 => self.execute_dec(self.get_addr_zero_x_index(inst.arguments[0]) as u16, 6),
+            0xCE => self.execute_dec(inst.get_absolute_addr(), 6),
+            0xDE => self.execute_dec(inst.get_absolute_addr() + self.index_x as u16, 7),
+
+            0xCA => { // dex
+                self.index_x -= 1;
+                self.set_flag_zero_by_val(self.index_x);
+                self.set_flag_negative_by_val(self.index_x);
+                self.cycle += 2;
+            }
+            0x88 => { // dey
+                self.index_y -= 1;
+                self.set_flag_zero_by_val(self.index_y);
+                self.set_flag_negative_by_val(self.index_y);
+                self.cycle += 2;
+            }
+
+            0x49 => self.execute_eor(inst.arguments[0], 2),
+            0x45 => self.execute_eor(self.get_addr_zero(inst.arguments[0]), 3),
+            0x55 => self.execute_eor(self.get_addr_zero_x(inst.arguments[0]), 4),
+            0x4D => self.execute_eor(self.get_addr_absolute(inst.get_absolute_addr()), 5),
+            0x5D => self.execute_eor(
+                self.get_addr_absolute_x(inst.get_absolute_addr()),
+                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+            ),
+            0x59 => self.execute_eor(
+                self.get_addr_absolute_y(inst.get_absolute_addr()),
+                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+            ),
+            0x41 => self.execute_eor(self.get_addr_indexed_indirect(inst.arguments[0]), 6),
+            0x51 => {
+                let memory_index: usize = self.get_addr_indirect_indexed_index(inst.arguments[0]);
+                self.execute_eor(
+                    self.memory[memory_index],
+                    increment_if_crossed(5, memory_index),
+                )
+            }
+
+            0xE6 => self.execute_dec(self.get_addr_zero_index(inst.arguments[0]) as u16, 5),
+            0xF6 => self.execute_dec(self.get_addr_zero_x_index(inst.arguments[0]) as u16, 6),
+            0xEE => self.execute_dec(inst.get_absolute_addr(), 6),
+            0xFE => self.execute_dec(inst.get_absolute_addr() + self.index_x as u16, 7),
+
+
+            0xE8 => { // inx
+                self.index_x += 1;
+                self.set_flag_zero_by_val(self.index_x);
+                self.set_flag_negative_by_val(self.index_x);
+                self.cycle += 2;
+            }
+            0xC8 => { // iny
+                self.index_y += 1;
+                self.set_flag_zero_by_val(self.index_y);
+                self.set_flag_negative_by_val(self.index_y);
+                self.cycle += 2;
+            }
+
             _ => panic!("Unknown op code received: {}", inst.op_code),
         };
         self.program_counter += inst.size as u16
@@ -280,6 +338,29 @@ impl Cpu {
         self.cycle += cycles
     }
 
+    fn execute_dec(&mut self, addr: u16, cycles: u32) {
+        let result: u8 = self.memory[addr as usize] - 1;
+        self.memory[addr as usize] = result;
+        self.set_flag_zero_by_val(result);
+        self.set_flag_negative_by_val(result);
+        self.cycle += cycles;
+    }
+
+    fn execute_eor(&mut self, value: u8, cycles: u32) {
+        self.accumulator ^= value;
+        self.set_flag_zero_by_val(self.accumulator);
+        self.set_flag_negative_by_val(self.accumulator);
+        self.cycle += cycles;
+    }
+
+    fn execute_inc(&mut self, addr: u16, cycles: u32) {
+        let result: u8 = self.memory[addr as usize] + 1;
+        self.memory[addr as usize] = result;
+        self.set_flag_zero_by_val(result);
+        self.set_flag_negative_by_val(result);
+        self.cycle += cycles;
+    }
+
     fn push(&mut self, val: u8) {
         self.memory[self.stack_pointer as usize + 0x0100] = val;
         self.stack_pointer += 1;
@@ -292,16 +373,22 @@ impl Cpu {
 
     //<editor-fold desc="Addressing">
     fn get_addr_zero(&self, arg: u8) -> u8 {
-        self.memory[(arg % 0xFF) as usize]
+        self.memory[self.get_addr_zero_index(arg) as usize]
+    }
+    fn get_addr_zero_index(&self, arg: u8) -> u8 {
+        arg % 0xFF
     }
     fn set_addr_zero(&mut self, arg: u8, value: u8) {
-        self.memory[(arg % 0xFF) as usize] = value
+        self.memory[self.get_addr_zero_index(arg) as usize] = value
     }
     fn get_addr_zero_x(&self, arg: u8) -> u8 {
-        self.memory[((arg + self.index_x) % 0xFF) as usize]
+        self.memory[self.get_addr_zero_x_index(arg) as usize]
+    }
+    fn get_addr_zero_x_index(&self, arg: u8) -> u8 {
+        (arg + self.index_x) % 0xFF
     }
     fn set_addr_zero_x(&mut self, arg: u8, value: u8) {
-        self.memory[((arg + self.index_x) % 0xFF) as usize] = value
+        self.memory[self.get_addr_zero_x_index(arg) as usize] = value
     }
     fn address_zero_y(&self, arg: u8) -> u8 {
         self.memory[((arg + self.index_y) % 0xFF) as usize]
