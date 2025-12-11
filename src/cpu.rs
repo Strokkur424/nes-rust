@@ -1,4 +1,4 @@
-struct Cpu {
+pub struct Cpu {
     memory: [u8; 0xFFFF],
     program_counter: u16,
     /// Initially starts at 255. Each push decreases this value by one, each pop increases it.
@@ -23,7 +23,7 @@ struct Cpu {
 }
 
 /// Instruction reference: https://www.nesdev.org/wiki/Instruction_reference
-struct Instruction {
+pub struct Instruction {
     op_code: u8,
     arguments: [u8; 2],
     // the number of bytes this instruction is long; used for incrementing the program counter
