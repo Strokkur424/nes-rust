@@ -1,19 +1,18 @@
 struct Cpu {
     memory: [u8; 0xFFFF],
     program_counter: u16,
-    stack_position: u8,
     stack_pointer: u8,
     accumulator: u8,
     index_x: u8,
     index_y: u8,
     /// Bit locations: <pre>
-    /// 0b100_0000 => carry flag
-    /// 0b010_0000 => zero flag
-    /// 0b001_0000 => interrupt disable
-    /// 0b000_1000 => decimal mode
-    /// 0b000_0100 => break command
-    /// 0b000_0010 => overflow flag
-    /// 0b000_0001 => negative flag
+    /// 1 << 6 => carry flag
+    /// 1 << 5 => zero flag
+    /// 1 << 4 => interrupt disable
+    /// 1 << 3 => decimal mode
+    /// 1 << 2 => break command
+    /// 1 << 1 => overflow flag
+    /// 1      => negative flag
     /// </pre>
     processor_status: u8,
 
@@ -48,9 +47,48 @@ impl Cpu {
         // of simply incrementing it by one. They should be handled first
         if BRANCHING_OP_CODES.contains(&inst.op_code) {
             self.program_counter = match inst.op_code {
-                0x90 => self.branch_if_condition(inst.arguments[0], !self.get_carry()),
-                0x80 => self.branch_if_condition(inst.arguments[0], self.get_carry()),
-                0xF0 => self.branch_if_condition(inst.arguments[0], self.get_zero()),
+                0x90 => self.branch_if_condition(inst.arguments[0], !self.get_flag_carry()),
+                0x80 => self.branch_if_condition(inst.arguments[0], self.get_flag_carry()),
+
+                0xF0 => self.branch_if_condition(inst.arguments[0], self.get_flag_zero()),
+                0xD0 => self.branch_if_condition(inst.arguments[0], !self.get_flag_zero()),
+
+                0x30 => self.branch_if_condition(inst.arguments[0], self.get_flag_negative()),
+                0x10 => self.branch_if_condition(inst.arguments[0], !self.get_flag_negative()),
+
+                0x70 => self.branch_if_condition(inst.arguments[0], self.get_flag_overflow()),
+                0x50 => self.branch_if_condition(inst.arguments[0], !self.get_flag_overflow()),
+
+                0x00 => {
+                    let val: u16 = self.program_counter + 2;
+                    let bytes: [u8; 2] = val.to_be_bytes();
+                    self.push(bytes[0]);
+                    self.push(bytes[1]);
+
+                    let mut out: u8 = 0b11 << 4;
+                    if self.get_flag_negative() {
+                        out |= 1 << 7
+                    }
+                    if self.get_flag_overflow() {
+                        out |= 1 << 6
+                    }
+                    if self.get_flag_decimal() {
+                        out |= 1 << 3
+                    }
+                    if self.get_flag_interrupt() {
+                        out |= 1 << 2
+                    }
+                    if self.get_flag_zero() {
+                        out |= 1 << 1
+                    }
+                    if self.get_flag_carry() {
+                        out |= 1
+                    }
+
+                    self.push(out);
+                    0xFFFE
+                }
+
                 _ => panic!(
                     "Not implemented branching op code received: {}",
                     inst.op_code
@@ -124,28 +162,66 @@ impl Cpu {
                 7,
             ),
 
+            0x24 => self.execute_bit(self.get_addr_zero(inst.arguments[0]), 3),
+            0x2C => self.execute_bit(self.get_addr_absolute(inst.get_absolute_addr()), 4),
+
+            0x18 => self.set_flag_carry(false),
+            0xD8 => self.set_flag_decimal(false),
+            0x58 => self.set_flag_interrupt(false),
+            0xB8 => self.set_flag_overflow(false),
+
+            0xC9 => self.execute_cmp(inst.arguments[0], 2),
+            0xC5 => self.execute_cmp(self.get_addr_zero(inst.arguments[0]), 3),
+            0xD5 => self.execute_cmp(self.get_addr_zero_x(inst.arguments[0]), 4),
+            0xCD => self.execute_cmp(self.get_addr_absolute(inst.get_absolute_addr()), 5),
+            0xDD => self.execute_cmp(
+                self.get_addr_absolute_x(inst.get_absolute_addr()),
+                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+            ),
+            0xD9 => self.execute_cmp(
+                self.get_addr_absolute_y(inst.get_absolute_addr()),
+                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+            ),
+            0xC1 => self.execute_cmp(self.get_addr_indexed_indirect(inst.arguments[0]), 6),
+            0xD1 => {
+                let memory_index: usize = self.get_addr_indirect_indexed_index(inst.arguments[0]);
+                self.execute_cmp(
+                    self.memory[memory_index],
+                    increment_if_crossed(5, memory_index),
+                )
+            }
+
+            0xE0 => self.execute_cmx(inst.arguments[0], 2),
+            0xE4 => self.execute_cmx(self.get_addr_zero(inst.arguments[0]), 2),
+            0xEC => self.execute_cmx(self.get_addr_absolute(inst.get_absolute_addr()), 4),
+
+            0xC0 => self.execute_cmy(inst.arguments[0], 2),
+            0xC4 => self.execute_cmy(self.get_addr_zero(inst.arguments[0]), 2),
+            0xCC => self.execute_cmy(self.get_addr_absolute(inst.get_absolute_addr()), 4),
+
             _ => panic!("Unknown op code received: {}", inst.op_code),
         };
         self.program_counter += inst.size as u16
     }
 
     fn execute_adc(&mut self, memory: u8, cycles: u32) {
-        let result: u16 =
-            self.accumulator as u16 + memory as u16 + (self.processor_status & 0b1000_0000) as u16;
-        self.set_carry(result > 0xFF);
-        self.set_zero(result == 0);
-        self.set_overflow(
+        let result: u16 = self.accumulator as u16
+            + memory as u16
+            + (if self.get_flag_carry() { 1 } else { 0 }) as u16;
+        self.set_flag_carry_by_val(result);
+        self.set_flag_zero_by_val(result as u8);
+        self.set_flag_overflow(
             (result ^ self.accumulator as u16) & (result ^ memory as u16) & 0x80 == 0x80,
         );
-        self.set_negative(result & 0b1000_0000 == 0b1000_0000);
+        self.set_flag_negative_by_val(result as u8);
         self.accumulator = (result & 0xFF) as u8;
         self.cycle += cycles
     }
 
     fn execute_and(&mut self, memory: u8, cycles: u32) {
         let result: u8 = self.accumulator & memory;
-        self.set_zero(result == 0);
-        self.set_negative(result & 0b1000_0000 == 0b1000_0000);
+        self.set_flag_zero_by_val(result);
+        self.set_flag_negative_by_val(result);
         self.accumulator = result;
         self.cycle += cycles
     }
@@ -154,10 +230,10 @@ impl Cpu {
     where
         R: Fn(&mut Cpu, u8),
     {
-        let result: u8 = value << 1 & 0b1111_1110;
-        self.set_carry(value & 0b1000_0000 == 0b1000_0000);
-        self.set_zero(result == 0);
-        self.set_negative(result & 0b1000_0000 == 0b1000_0000);
+        let result: u8 = (value << 1) & 0b1111_1110;
+        self.set_flag_carry((value >> 7) & 1 == 1);
+        self.set_flag_zero(result == 0);
+        self.set_flag_negative_by_val(result);
         r(self, result);
         self.cycle += cycles
     }
@@ -169,6 +245,49 @@ impl Cpu {
         } else {
             self.program_counter + 2 + value.cast_signed() as u16
         }
+    }
+
+    fn execute_bit(&mut self, value: u8, cycles: u32) {
+        let result: u8 = self.accumulator & value;
+        self.set_flag_zero_by_val(result);
+        self.set_flag_overflow_by_val(result);
+        self.set_flag_negative_by_val(result);
+
+        self.cycle += cycles;
+    }
+
+    fn execute_cmp(&mut self, value: u8, cycles: u32) {
+        self.set_flag_carry(self.accumulator >= value);
+        self.set_flag_zero(self.accumulator == value);
+        self.set_flag_negative_by_val(self.accumulator - value);
+
+        self.cycle += cycles
+    }
+
+    fn execute_cmx(&mut self, value: u8, cycles: u32) {
+        self.set_flag_carry(self.index_x >= value);
+        self.set_flag_zero(self.index_x == value);
+        self.set_flag_negative_by_val(self.index_x - value);
+
+        self.cycle += cycles
+    }
+
+    fn execute_cmy(&mut self, value: u8, cycles: u32) {
+        self.set_flag_carry(self.index_y >= value);
+        self.set_flag_zero(self.index_y == value);
+        self.set_flag_negative_by_val(self.index_y - value);
+
+        self.cycle += cycles
+    }
+
+    fn push(&mut self, val: u8) {
+        self.memory[self.stack_pointer as usize + 0x0100] = val;
+        self.stack_pointer += 1;
+    }
+
+    fn pop(&mut self) -> u8 {
+        self.stack_pointer -= 1;
+        self.memory[self.stack_pointer as usize + 0x0100]
     }
 
     //<editor-fold desc="Addressing">
@@ -219,52 +338,79 @@ impl Cpu {
     //</editor-fold>
 
     //<editor-fold desc="Processor Status Methods">
-    fn get_carry(&self) -> bool {
-        self.processor_status & 0b100_0000 == 0b100_0000
+    fn get_flag(&self, offset: u8) -> bool {
+        (self.processor_status >> offset) & 1 == 1
     }
 
-    fn set_carry(&mut self, val: bool) {
+    fn set_flag(&mut self, val: bool, offset: u8) {
         if val {
-            self.processor_status |= 0b100_0000;
+            self.processor_status |= 1 << offset;
         } else {
-            self.processor_status &= 0b011_1111;
+            self.processor_status &= !(1 << offset);
         }
     }
 
-    fn get_zero(&self) -> bool {
-        self.processor_status & 0b010_0000 == 0b010_0000
+    fn get_flag_carry(&self) -> bool {
+        self.get_flag(6)
     }
 
-    fn set_zero(&mut self, val: bool) {
-        if val {
-            self.processor_status |= 0b010_0000;
-        } else {
-            self.processor_status &= 0b101_1111;
-        }
+    fn set_flag_carry(&mut self, val: bool) {
+        self.set_flag(val, 6)
     }
 
-    fn get_overflow(&self) -> bool {
-        self.processor_status & 0b001_0000 == 0b001_0000
+    fn set_flag_carry_by_val(&mut self, val: u16) {
+        self.set_flag_carry(val > 0xFF)
     }
 
-    fn set_overflow(&mut self, val: bool) {
-        if val {
-            self.processor_status |= 0b001_0000;
-        } else {
-            self.processor_status &= 0b110_1111;
-        }
+    fn get_flag_zero(&self) -> bool {
+        self.get_flag(5)
     }
 
-    fn get_negative(&self) -> bool {
-        self.processor_status & 0b000_1000 == 0b000_1000
+    fn set_flag_zero(&mut self, val: bool) {
+        self.set_flag(val, 5)
     }
 
-    fn set_negative(&mut self, val: bool) {
-        if val {
-            self.processor_status |= 0b000_1000;
-        } else {
-            self.processor_status &= 0b111_0111;
-        }
+    fn set_flag_zero_by_val(&mut self, val: u8) {
+        self.set_flag_zero(val == 0);
+    }
+
+    fn get_flag_overflow(&self) -> bool {
+        self.get_flag(1)
+    }
+
+    fn set_flag_overflow(&mut self, val: bool) {
+        self.set_flag(val, 1)
+    }
+
+    fn set_flag_overflow_by_val(&mut self, val: u8) {
+        self.set_flag_overflow((val >> 6) & 1 == 1);
+    }
+
+    fn get_flag_negative(&self) -> bool {
+        self.get_flag(0)
+    }
+
+    fn set_flag_negative(&mut self, val: bool) {
+        self.set_flag(val, 0)
+    }
+
+    fn set_flag_negative_by_val(&mut self, val: u8) {
+        self.set_flag_negative(val >> 7 & 1 == 1);
+    }
+
+    fn get_flag_decimal(&self) -> bool {
+        self.get_flag(3)
+    }
+
+    fn set_flag_decimal(&mut self, val: bool) {
+        self.set_flag(val, 3)
+    }
+    fn get_flag_interrupt(&self) -> bool {
+        self.get_flag(4)
+    }
+
+    fn set_flag_interrupt(&mut self, val: bool) {
+        self.set_flag(val, 4)
     }
     //</editor-fold>
 }
