@@ -89,6 +89,18 @@ impl Cpu {
                     0xFFFE
                 }
 
+                0x4C => self.get_addr_absolute(inst.get_absolute_addr()) as u16,
+                0x6C => panic!("Indirect jmp instruction is not supported yet."), // TODO: Implement this
+
+                0x20 => {
+                    // jsr
+                    let val: u16 = self.program_counter + 2;
+                    let bytes: [u8; 2] = val.to_be_bytes();
+                    self.push(bytes[0]);
+                    self.push(bytes[1]);
+                    self.get_addr_absolute(inst.get_absolute_addr()) as u16
+                }
+
                 _ => panic!(
                     "Not implemented branching op code received: {}",
                     inst.op_code
@@ -204,13 +216,15 @@ impl Cpu {
             0xCE => self.execute_dec(inst.get_absolute_addr(), 6),
             0xDE => self.execute_dec(inst.get_absolute_addr() + self.index_x as u16, 7),
 
-            0xCA => { // dex
+            0xCA => {
+                // dex
                 self.index_x -= 1;
                 self.set_flag_zero_by_val(self.index_x);
                 self.set_flag_negative_by_val(self.index_x);
                 self.cycle += 2;
             }
-            0x88 => { // dey
+            0x88 => {
+                // dey
                 self.index_y -= 1;
                 self.set_flag_zero_by_val(self.index_y);
                 self.set_flag_negative_by_val(self.index_y);
@@ -243,19 +257,81 @@ impl Cpu {
             0xEE => self.execute_dec(inst.get_absolute_addr(), 6),
             0xFE => self.execute_dec(inst.get_absolute_addr() + self.index_x as u16, 7),
 
-
-            0xE8 => { // inx
+            0xE8 => {
+                // inx
                 self.index_x += 1;
                 self.set_flag_zero_by_val(self.index_x);
                 self.set_flag_negative_by_val(self.index_x);
                 self.cycle += 2;
             }
-            0xC8 => { // iny
+            0xC8 => {
+                // iny
                 self.index_y += 1;
                 self.set_flag_zero_by_val(self.index_y);
                 self.set_flag_negative_by_val(self.index_y);
                 self.cycle += 2;
             }
+
+            0xA9 => self.execute_lda(inst.arguments[0], 2),
+            0xA5 => self.execute_lda(self.get_addr_zero(inst.arguments[0]), 3),
+            0xB5 => self.execute_lda(self.get_addr_zero_x(inst.arguments[0]), 4),
+            0xAD => self.execute_lda(self.get_addr_absolute(inst.get_absolute_addr()), 4),
+            0xBD => self.execute_lda(
+                self.get_addr_absolute_x(inst.get_absolute_addr()),
+                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+            ),
+            0xB9 => self.execute_lda(
+                self.get_addr_absolute_y(inst.get_absolute_addr()),
+                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+            ),
+            0xA1 => self.execute_lda(self.get_addr_indexed_indirect(inst.arguments[0]), 6),
+            0xB1 => {
+                let memory_index: usize = self.get_addr_indirect_indexed_index(inst.arguments[0]);
+                self.execute_lda(
+                    self.memory[memory_index],
+                    increment_if_crossed(5, memory_index),
+                )
+            }
+
+            0xA2 => self.execute_ldx(inst.arguments[0], 2),
+            0xA6 => self.execute_ldx(self.get_addr_zero(inst.arguments[0]), 3),
+            0xB6 => self.execute_ldx(self.get_addr_zero_y(inst.arguments[0]), 4),
+            0xAE => self.execute_ldx(self.get_addr_absolute(inst.get_absolute_addr()), 4),
+            0xBE => self.execute_ldx(
+                self.get_addr_absolute_y(inst.get_absolute_addr()),
+                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+            ),
+
+            0xA0 => self.execute_ldy(inst.arguments[0], 2),
+            0xA4 => self.execute_ldy(self.get_addr_zero(inst.arguments[0]), 3),
+            0xB4 => self.execute_ldy(self.get_addr_zero_x(inst.arguments[0]), 4),
+            0xAC => self.execute_ldy(self.get_addr_absolute(inst.get_absolute_addr()), 4),
+            0xBC => self.execute_ldy(
+                self.get_addr_absolute_x(inst.get_absolute_addr()),
+                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+            ),
+
+            0x4A => self.execute_lsr(self.accumulator, |cpu, r| -> () { cpu.accumulator = r }, 2),
+            0x46 => self.execute_lsr(
+                self.get_addr_zero(inst.arguments[0]),
+                |cpu, r| -> () { cpu.set_addr_zero(inst.arguments[0], r) },
+                5,
+            ),
+            0x56 => self.execute_lsr(
+                self.get_addr_zero_x(inst.arguments[0]),
+                |cpu, r| -> () { cpu.set_addr_zero_x(inst.arguments[0], r) },
+                5,
+            ),
+            0x4E => self.execute_lsr(
+                self.get_addr_absolute(inst.get_absolute_addr()),
+                |cpu, r| -> () { cpu.set_addr_absolute(inst.get_absolute_addr(), r) },
+                5,
+            ),
+            0x5E => self.execute_lsr(
+                self.get_addr_absolute_x(inst.get_absolute_addr()),
+                |cpu, r| -> () { cpu.set_addr_absolute_x(inst.get_absolute_addr(), r) },
+                5,
+            ),
 
             _ => panic!("Unknown op code received: {}", inst.op_code),
         };
@@ -361,6 +437,39 @@ impl Cpu {
         self.cycle += cycles;
     }
 
+    fn execute_lda(&mut self, value: u8, cycles: u32) {
+        self.accumulator = value;
+        self.set_flag_zero_by_val(self.accumulator);
+        self.set_flag_negative_by_val(self.accumulator);
+        self.cycle += cycles;
+    }
+
+    fn execute_ldx(&mut self, value: u8, cycles: u32) {
+        self.index_x = value;
+        self.set_flag_zero_by_val(self.index_x);
+        self.set_flag_negative_by_val(self.index_x);
+        self.cycle += cycles;
+    }
+
+    fn execute_ldy(&mut self, value: u8, cycles: u32) {
+        self.index_y = value;
+        self.set_flag_zero_by_val(self.index_y);
+        self.set_flag_negative_by_val(self.index_y);
+        self.cycle += cycles;
+    }
+
+    fn execute_lsr<R>(&mut self, value: u8, r: R, cycles: u32)
+    where
+        R: Fn(&mut Cpu, u8),
+    {
+        let result: u8 = (value >> 1) & !(1 >> 1);
+        self.set_flag_carry(false);
+        self.set_flag_zero(result == 0);
+        self.set_flag_negative(false);
+        r(self, result);
+        self.cycle += cycles
+    }
+
     fn push(&mut self, val: u8) {
         self.memory[self.stack_pointer as usize + 0x0100] = val;
         self.stack_pointer += 1;
@@ -386,6 +495,12 @@ impl Cpu {
     }
     fn get_addr_zero_x_index(&self, arg: u8) -> u8 {
         (arg + self.index_x) % 0xFF
+    }
+    fn get_addr_zero_y(&self, arg: u8) -> u8 {
+        self.memory[self.get_addr_zero_y_index(arg) as usize]
+    }
+    fn get_addr_zero_y_index(&self, arg: u8) -> u8 {
+        (arg + self.index_y) % 0xFF
     }
     fn set_addr_zero_x(&mut self, arg: u8, value: u8) {
         self.memory[self.get_addr_zero_x_index(arg) as usize] = value
