@@ -24,6 +24,8 @@ struct Cpu {
 struct Instruction {
     op_code: u8,
     arguments: [u8; 2],
+    // the number of bytes this instruction is long; used for incrementing the program counter
+    size: u8,
 }
 
 impl Instruction {
@@ -32,12 +34,31 @@ impl Instruction {
     }
 }
 
+const BRANCHING_OP_CODES: [u8; 14] = [
+    0x90, 0x80, 0xF0, 0x30, 0xD0, 0x10, 0x00, 0x50, 0x70, 0x4C, 0x6C, 0x20, 0x40, 0x60,
+];
+
 fn increment_if_crossed(base: u32, addr: usize) -> u32 {
     if addr <= 0xFF { base } else { base + 1 }
 }
 
 impl Cpu {
     pub fn execute_instruction(&mut self, inst: &Instruction) {
+        // branching instructions are special, as they modify the program counter directly instead
+        // of simply incrementing it by one. They should be handled first
+        if BRANCHING_OP_CODES.contains(&inst.op_code) {
+            self.program_counter = match inst.op_code {
+                0x90 => self.branch_if_condition(inst.arguments[0], !self.get_carry()),
+                0x80 => self.branch_if_condition(inst.arguments[0], self.get_carry()),
+                0xF0 => self.branch_if_condition(inst.arguments[0], self.get_zero()),
+                _ => panic!(
+                    "Not implemented branching op code received: {}",
+                    inst.op_code
+                ),
+            };
+            return;
+        }
+
         match inst.op_code {
             0x69 => self.execute_adc(inst.arguments[0], 2),
             0x65 => self.execute_adc(self.get_addr_zero(inst.arguments[0]), 3),
@@ -105,6 +126,7 @@ impl Cpu {
 
             _ => panic!("Unknown op code received: {}", inst.op_code),
         };
+        self.program_counter += inst.size as u16
     }
 
     fn execute_adc(&mut self, memory: u8, cycles: u32) {
@@ -138,6 +160,15 @@ impl Cpu {
         self.set_negative(result & 0b1000_0000 == 0b1000_0000);
         r(self, result);
         self.cycle += cycles
+    }
+
+    fn branch_if_condition(&mut self, value: u8, condition: bool) -> u16 {
+        self.cycle += 2;
+        if !condition {
+            self.program_counter + 2
+        } else {
+            self.program_counter + 2 + value.cast_signed() as u16
+        }
     }
 
     //<editor-fold desc="Addressing">
