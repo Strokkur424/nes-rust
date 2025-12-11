@@ -68,16 +68,23 @@ impl Cpu {
                 0x50 => self.branch_if_condition(inst.arguments[0], !self.get_flag_overflow()),
 
                 0x00 => {
+                    // TODO implement the brk hardware bug
                     let val: u16 = self.program_counter + 2;
                     let bytes: [u8; 2] = val.to_be_bytes();
                     self.push(bytes[0]);
                     self.push(bytes[1]);
 
                     self.push(self.get_processor_status());
+                    self.set_flag_interrupt(true);
+
+                    self.cycle += 7;
                     0xFFFE
                 }
 
-                0x4C => self.get_addr_absolute(inst.get_absolute_addr()) as u16,
+                0x4C => {
+                    self.cycle += 3;
+                    self.get_addr_absolute(inst.get_absolute_addr()) as u16
+                }
                 0x6C => panic!("Indirect jmp instruction is not supported yet."), // TODO: Implement this
 
                 0x20 => {
@@ -86,7 +93,24 @@ impl Cpu {
                     let bytes: [u8; 2] = val.to_be_bytes();
                     self.push(bytes[0]);
                     self.push(bytes[1]);
+                    self.cycle += 6;
                     self.get_addr_absolute(inst.get_absolute_addr()) as u16
+                }
+
+                0x40 => {
+                    let flags: u8 = self.pop();
+                    self.set_processor_status(flags, false);
+
+                    let low: u8 = self.pop();
+                    let high: u8 = self.pop();
+                    self.cycle += 6;
+                    u16::from_be_bytes([high, low])
+                }
+                0x60 => {
+                    let low: u8 = self.pop();
+                    let high: u8 = self.pop();
+                    self.cycle += 6;
+                    u16::from_be_bytes([high, low]) + 1
                 }
 
                 _ => panic!(
@@ -416,22 +440,6 @@ impl Cpu {
                 |cpu, r| -> () { cpu.set_addr_absolute_x(inst.get_absolute_addr(), r) },
                 6,
             ),
-
-            0x40 => {
-                let flags: u8 = self.pop();
-                self.set_processor_status(flags, false);
-
-                let low: u8 = self.pop();
-                let high: u8 = self.pop();
-                self.program_counter = u16::from_be_bytes([high, low]);
-                self.cycle += 6;
-            }
-            0x60 => {
-                let low: u8 = self.pop();
-                let high: u8 = self.pop();
-                self.program_counter = u16::from_be_bytes([high, low]) + 1;
-                self.cycle += 6;
-            }
 
             0xE9 => self.execute_sbc(inst.arguments[0], 2),
             0xE5 => self.execute_sbc(self.get_addr_zero(inst.arguments[0]), 3),
