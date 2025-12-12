@@ -1,5 +1,3 @@
-use std::fmt::{Debug, Formatter};
-
 pub struct Cpu {
     memory: [u8; 0xFFFF],
     program_counter: u16,
@@ -42,7 +40,7 @@ impl Instruction {
     }
 
     fn get_absolute_addr(&self) -> u16 {
-        (self.arguments[0] as u16) << 8 & self.arguments[1] as u16
+        (self.arguments[0] as u16) << 8 | self.arguments[1] as u16
     }
 }
 
@@ -50,11 +48,38 @@ const BRANCHING_OP_CODES: [u8; 14] = [
     0x90, 0x80, 0xF0, 0x30, 0xD0, 0x10, 0x00, 0x50, 0x70, 0x4C, 0x6C, 0x20, 0x40, 0x60,
 ];
 
-fn increment_if_crossed(base: u32, addr: usize) -> u32 {
-    if addr <= 0xFF { base } else { base + 1 }
+fn increment_if_crossed_absolute(base: u32, addr: u16, inc: u8) -> u32 {
+    if ((addr + inc as u16) & 0xFF00) == (addr & 0xFF00) {
+        base
+    } else {
+        base + 1
+    }
+}
+
+fn increment_if_crossed_indirect_indexed(base: u32, addr: u8, cpu: &Cpu) -> u32 {
+    let indirect_indexed: u16 = cpu.get_addr_indirect_indexed_index(addr) as u16;
+    if ((indirect_indexed - cpu.index_y as u16) & 0xFF00) == (indirect_indexed & 0xFF00) {
+        base
+    } else {
+        base + 1
+    }
 }
 
 impl Cpu {
+    pub fn new() -> Cpu {
+        Cpu {
+            memory: [0; 65535],
+            program_counter: 0,
+            stack_pointer: 0xFF,
+            accumulator: 0,
+            index_x: 0,
+            index_y: 0,
+            processor_status: 0,
+            cycle: 0,
+            change_interrupt_disable_flag: -1,
+        }
+    }
+
     pub fn execute_instruction(&mut self, inst: &Instruction) {
         if self.change_interrupt_disable_flag != -1 {
             self.set_flag_interrupt(self.change_interrupt_disable_flag != 0);
@@ -135,23 +160,20 @@ impl Cpu {
             0x69 => self.execute_adc(inst.arguments[0], 2),
             0x65 => self.execute_adc(self.get_addr_zero(inst.arguments[0]), 3),
             0x75 => self.execute_adc(self.get_addr_zero_x(inst.arguments[0]), 4),
-            0x6D => self.execute_adc(self.get_addr_absolute(inst.get_absolute_addr()), 5),
+            0x6D => self.execute_adc(self.get_addr_absolute(inst.get_absolute_addr()), 4),
             0x7D => self.execute_adc(
                 self.get_addr_absolute_x(inst.get_absolute_addr()),
-                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+                increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_x),
             ),
             0x79 => self.execute_adc(
                 self.get_addr_absolute_y(inst.get_absolute_addr()),
-                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+                increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_y),
             ),
             0x61 => self.execute_adc(self.get_addr_indexed_indirect(inst.arguments[0]), 6),
-            0x71 => {
-                let memory_index: usize = self.get_addr_indirect_indexed_index(inst.arguments[0]);
-                self.execute_adc(
-                    self.memory[memory_index],
-                    increment_if_crossed(5, memory_index),
-                )
-            }
+            0x71 => self.execute_adc(
+                self.get_addr_indirect_indexed(inst.arguments[0]),
+                increment_if_crossed_indirect_indexed(5, inst.arguments[0], self),
+            ),
 
             0x29 => self.execute_and(inst.arguments[0], 2),
             0x25 => self.execute_and(self.get_addr_zero(inst.arguments[0]), 3),
@@ -159,20 +181,17 @@ impl Cpu {
             0x2D => self.execute_and(self.get_addr_absolute(inst.get_absolute_addr()), 4),
             0x3D => self.execute_and(
                 self.get_addr_absolute_x(inst.get_absolute_addr()),
-                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+                increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_x),
             ),
             0x39 => self.execute_and(
                 self.get_addr_absolute_y(inst.get_absolute_addr()),
-                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+                increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_y),
             ),
             0x21 => self.execute_and(self.get_addr_indexed_indirect(inst.arguments[0]), 6),
-            0x31 => {
-                let memory_index: usize = self.get_addr_indirect_indexed_index(inst.arguments[0]);
-                self.execute_and(
-                    self.memory[memory_index],
-                    increment_if_crossed(5, memory_index),
-                )
-            }
+            0x31 => self.execute_and(
+                self.get_addr_indirect_indexed(inst.arguments[0]),
+                increment_if_crossed_indirect_indexed(5, inst.arguments[0], self),
+            ),
 
             0x0A => self.execute_asl(self.accumulator, |cpu, r| -> () { cpu.accumulator += r }, 2),
             0x06 => self.execute_asl(
@@ -222,20 +241,17 @@ impl Cpu {
             0xCD => self.execute_cmp(self.get_addr_absolute(inst.get_absolute_addr()), 5),
             0xDD => self.execute_cmp(
                 self.get_addr_absolute_x(inst.get_absolute_addr()),
-                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+                increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_x),
             ),
             0xD9 => self.execute_cmp(
                 self.get_addr_absolute_y(inst.get_absolute_addr()),
-                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+                increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_y),
             ),
             0xC1 => self.execute_cmp(self.get_addr_indexed_indirect(inst.arguments[0]), 6),
-            0xD1 => {
-                let memory_index: usize = self.get_addr_indirect_indexed_index(inst.arguments[0]);
-                self.execute_cmp(
-                    self.memory[memory_index],
-                    increment_if_crossed(5, memory_index),
-                )
-            }
+            0xD1 => self.execute_cmp(
+                self.get_addr_indirect_indexed(inst.arguments[0]),
+                increment_if_crossed_indirect_indexed(5, inst.arguments[0], self),
+            ),
 
             0xE0 => self.execute_cmx(inst.arguments[0], 2),
             0xE4 => self.execute_cmx(self.get_addr_zero(inst.arguments[0]), 2),
@@ -271,25 +287,22 @@ impl Cpu {
             0x4D => self.execute_eor(self.get_addr_absolute(inst.get_absolute_addr()), 5),
             0x5D => self.execute_eor(
                 self.get_addr_absolute_x(inst.get_absolute_addr()),
-                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+                increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_x),
             ),
             0x59 => self.execute_eor(
                 self.get_addr_absolute_y(inst.get_absolute_addr()),
-                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+                increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_y),
             ),
             0x41 => self.execute_eor(self.get_addr_indexed_indirect(inst.arguments[0]), 6),
-            0x51 => {
-                let memory_index: usize = self.get_addr_indirect_indexed_index(inst.arguments[0]);
-                self.execute_eor(
-                    self.memory[memory_index],
-                    increment_if_crossed(5, memory_index),
-                )
-            }
+            0x51 => self.execute_eor(
+                self.get_addr_indirect_indexed(inst.arguments[0]),
+                increment_if_crossed_indirect_indexed(5, inst.arguments[0], self),
+            ),
 
-            0xE6 => self.execute_dec(self.get_addr_zero_index(inst.arguments[0]) as u16, 5),
-            0xF6 => self.execute_dec(self.get_addr_zero_x_index(inst.arguments[0]) as u16, 6),
-            0xEE => self.execute_dec(inst.get_absolute_addr(), 6),
-            0xFE => self.execute_dec(inst.get_absolute_addr() + self.index_x as u16, 7),
+            0xE6 => self.execute_inc(self.get_addr_zero_index(inst.arguments[0]) as u16, 5),
+            0xF6 => self.execute_inc(self.get_addr_zero_x_index(inst.arguments[0]) as u16, 6),
+            0xEE => self.execute_inc(inst.get_absolute_addr(), 6),
+            0xFE => self.execute_inc(inst.get_absolute_addr() + self.index_x as u16, 7),
 
             0xE8 => {
                 // inx
@@ -312,20 +325,17 @@ impl Cpu {
             0xAD => self.execute_lda(self.get_addr_absolute(inst.get_absolute_addr()), 4),
             0xBD => self.execute_lda(
                 self.get_addr_absolute_x(inst.get_absolute_addr()),
-                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+                increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_x),
             ),
             0xB9 => self.execute_lda(
                 self.get_addr_absolute_y(inst.get_absolute_addr()),
-                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+                increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_y),
             ),
             0xA1 => self.execute_lda(self.get_addr_indexed_indirect(inst.arguments[0]), 6),
-            0xB1 => {
-                let memory_index: usize = self.get_addr_indirect_indexed_index(inst.arguments[0]);
-                self.execute_lda(
-                    self.memory[memory_index],
-                    increment_if_crossed(5, memory_index),
-                )
-            }
+            0xB1 => self.execute_lda(
+                self.get_addr_indirect_indexed(inst.arguments[0]),
+                increment_if_crossed_indirect_indexed(5, inst.arguments[0], self),
+            ),
 
             0xA2 => self.execute_ldx(inst.arguments[0], 2),
             0xA6 => self.execute_ldx(self.get_addr_zero(inst.arguments[0]), 3),
@@ -333,7 +343,7 @@ impl Cpu {
             0xAE => self.execute_ldx(self.get_addr_absolute(inst.get_absolute_addr()), 4),
             0xBE => self.execute_ldx(
                 self.get_addr_absolute_y(inst.get_absolute_addr()),
-                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+                increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_y),
             ),
 
             0xA0 => self.execute_ldy(inst.arguments[0], 2),
@@ -342,7 +352,7 @@ impl Cpu {
             0xAC => self.execute_ldy(self.get_addr_absolute(inst.get_absolute_addr()), 4),
             0xBC => self.execute_ldy(
                 self.get_addr_absolute_x(inst.get_absolute_addr()),
-                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+                increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_x),
             ),
 
             0x4A => self.execute_lsr(self.accumulator, |cpu, r| -> () { cpu.accumulator = r }, 2),
@@ -375,17 +385,17 @@ impl Cpu {
             0x0D => self.execute_ora(self.get_addr_absolute(inst.get_absolute_addr()), 4),
             0x1D => self.execute_ora(
                 self.get_addr_absolute_x(inst.get_absolute_addr()),
-                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+                increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_x),
             ),
             0x19 => self.execute_ora(
                 self.get_addr_absolute_y(inst.get_absolute_addr()),
-                increment_if_crossed(4, inst.get_absolute_addr() as usize),
+                increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_y),
             ),
             0x01 => self.execute_ora(self.get_addr_indexed_indirect(inst.arguments[0]), 6),
-            0x11 => {
-                let location: usize = self.get_addr_indirect_indexed_index(inst.arguments[0]);
-                self.execute_ora(self.memory[location], increment_if_crossed(5, location));
-            }
+            0x11 => self.execute_ora(
+                self.get_addr_indirect_indexed(inst.arguments[0]),
+                increment_if_crossed_indirect_indexed(5, inst.arguments[0], self),
+            ),
 
             0x48 => {
                 self.push(self.accumulator);
@@ -457,16 +467,16 @@ impl Cpu {
             0xED => self.execute_sbc(self.get_addr_absolute(inst.get_absolute_addr()), 4),
             0xFD => self.execute_sbc(
                 self.get_addr_absolute_x(inst.get_absolute_addr()),
-                increment_if_crossed(4, inst.get_absolute_addr() as usize + self.index_x as usize),
+                increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_x),
             ),
             0xF9 => self.execute_sbc(
                 self.get_addr_absolute_y(inst.get_absolute_addr()),
-                increment_if_crossed(4, inst.get_absolute_addr() as usize + self.index_y as usize),
+                increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_y),
             ),
             0xE1 => self.execute_sbc(self.get_addr_indexed_indirect(inst.arguments[0]), 6),
             0xF1 => self.execute_sbc(
                 self.get_addr_indirect_indexed(inst.arguments[0]),
-                increment_if_crossed(5, self.get_addr_indirect_indexed_index(inst.arguments[0])),
+                increment_if_crossed_indirect_indexed(5, inst.arguments[0], self),
             ),
 
             0x38 => {
@@ -828,9 +838,6 @@ impl Cpu {
     fn set_addr_zero_x(&mut self, arg: u8, value: u8) {
         self.memory[self.get_addr_zero_x_index(arg) as usize] = value
     }
-    fn address_zero_y(&self, arg: u8) -> u8 {
-        self.memory[((arg + self.index_y) % 0xFF) as usize]
-    }
     fn get_addr_absolute(&self, arg: u16) -> u8 {
         self.memory[arg as usize]
     }
@@ -851,19 +858,29 @@ impl Cpu {
         self.memory[self.get_addr_indexed_indirect_index(arg)]
     }
     /// (Indirect,X)
+    ///
+    /// Indirectly retrieves a 16-bit address at (arg + x)'s location.
+    /// (arg + x) points to the low byte, (arg + x + 1) points to the high byte.
+    #[rustfmt::skip]
     fn get_addr_indexed_indirect_index(&self, arg: u8) -> usize {
-        self.memory[((arg + self.index_x) & 0xFF) as usize] as usize
-            + (self.memory[((arg + self.index_x + 1) & 0xFF) as usize] as usize)
-            << 8
+        (((self.memory[((arg + self.index_x + 1) as usize) & 0xFF] as u16) << 8)
+            | self.memory[((arg + self.index_x) & 0xFF) as usize] as u16
+        ) as usize
     }
     /// (Indirect),Y
     fn get_addr_indirect_indexed(&self, arg: u8) -> u8 {
         self.memory[self.get_addr_indirect_indexed_index(arg)]
     }
     /// (Indirect),Y
+    ///
+    /// Indirectly retrieves a 16-bit address at arg's location, adding y to it.
+    /// arg points to the low byte, (arg + 1) points to the high byte.
+    #[rustfmt::skip]
     fn get_addr_indirect_indexed_index(&self, arg: u8) -> usize {
-        self.memory[arg as usize] as usize + (self.memory[(arg as usize + 1) & 256] as usize)
-            << 8 + self.index_y as usize
+        ((((self.memory[(arg as usize + 1) & 0xFF] as u16) << 8)
+            | self.memory[arg as usize] as u16)
+            + self.index_y as u16
+        ) as usize
     }
     //</editor-fold>
 
@@ -943,4 +960,149 @@ impl Cpu {
         self.set_flag(val, 4)
     }
     //</editor-fold>
+}
+
+#[cfg(test)]
+#[rustfmt::skip]
+mod tests {
+    use crate::cpu::{Cpu, Instruction};
+
+    fn test_inst<T>(
+        op_code: u8, args: [u8; 2], size: u8, test: T, pc: u16, cycle: u32
+    ) where
+        T: Fn(&Cpu)
+    {
+        let mut cpu = Cpu::new();
+        let inst = Instruction::new(op_code, args, size);
+        cpu.execute_instruction(&inst);
+
+        assert_eq!(cpu.cycle, cycle);
+        assert_eq!(cpu.program_counter, pc);
+        test(&cpu);
+    }
+
+    fn test_inst_init<I, T>(
+        init: I, op_code: u8, args: [u8; 2], size: u8, test: T, pc: u16, cycle: u32,
+    ) where
+        I: Fn(&mut Cpu),
+        T: Fn(&Cpu),
+    {
+        let mut cpu = Cpu::new();
+        init(&mut cpu);
+        let inst = Instruction::new(op_code, args, size);
+        cpu.execute_instruction(&inst);
+
+        assert_eq!(cpu.cycle, cycle);
+        assert_eq!(cpu.program_counter, pc);
+        test(&cpu);
+    }
+
+    #[test]
+    fn test_adc() {
+        test_inst(
+            0x69, [0x05, 0x00], 2,
+            |cpu| -> () {
+                assert_eq!(cpu.accumulator, 0x05);
+            }, 2, 2
+        );
+        test_inst_init(
+            |cpu| -> () {
+                cpu.memory[0x0005] = 5;
+                cpu.accumulator = 10;
+            }, 0x65, [0x05, 0x00], 2,
+            |cpu| -> () {
+                assert_eq!(cpu.accumulator, 15);
+            }, 2, 3
+        );
+        test_inst_init(
+            |cpu| -> () {
+                cpu.memory[0x0006] = 10;
+                cpu.accumulator = 10;
+                cpu.index_x = 1;
+            },
+            0x75, [0x05, 0x00], 2,
+            |cpu| -> () {
+                assert_eq!(cpu.accumulator, 20);
+            }, 2, 4
+        );
+        test_inst_init(
+            |cpu| -> () {
+                cpu.memory[0x1145] = 10;
+                cpu.accumulator = 30;
+            },
+            0x6D, [0x11, 0x45], 3,
+            |cpu| -> () {
+                assert_eq!(cpu.accumulator, 40);
+            }, 3, 4
+        );
+        test_inst_init(
+            |cpu| -> () {
+                cpu.memory[0x1146] = 1 << 7;
+                cpu.accumulator = 1 << 7;
+                cpu.index_x = 1;
+            },
+            0x7D, [0x11, 0x45], 3,
+            |cpu| -> () {
+                assert_eq!(cpu.accumulator, 0);
+                assert_eq!(cpu.get_flag_carry(), true);
+                assert_eq!(cpu.get_flag_overflow(), true);
+            }, 3, 4
+        );
+        test_inst_init(
+            |cpu| -> () {
+                cpu.memory[0x1200] = 10;
+                cpu.accumulator = 20;
+                cpu.index_y = 1;
+            },
+            0x79, [0x11, 0xFF], 3,
+            |cpu| -> () {
+                assert_eq!(cpu.accumulator, 30);
+                assert_eq!(cpu.get_flag_carry(), false);
+                assert_eq!(cpu.get_flag_overflow(), false);
+                assert_eq!(cpu.get_flag_negative(), false);
+            }, 3, 5
+        );
+        test_inst_init(
+            |cpu| -> () {
+                cpu.memory[0x0055] = 0x10;
+                cpu.memory[0x0056] = 0x20;
+                cpu.memory[0x2010] = 75;
+
+                cpu.index_x = 5;
+                cpu.accumulator = 20;
+            },
+            0x61, [0x50, 0x00], 2,
+            |cpu| -> () {
+                assert_eq!(cpu.accumulator, 95);
+            }, 2, 6
+        );
+        test_inst_init(
+            |cpu| -> () {
+                cpu.memory[0x0020] = 0x10;
+                cpu.memory[0x0021] = 0x20;
+                cpu.memory[0x2020] = 100;
+
+                cpu.index_y = 0x10;
+            },
+            0x71, [0x20, 0x00], 2,
+            |cpu| -> () {
+                assert_eq!(cpu.accumulator, 100);
+            }, 2, 5
+        );
+
+        // Extra one for testing page cross
+        test_inst_init(
+            |cpu| -> () {
+                cpu.memory[0x0020] = 0xF0;
+                cpu.memory[0x0021] = 0x20;
+                cpu.memory[0x2110] = 200;
+
+                cpu.index_y = 0x20;
+            },
+            0x71, [0x20, 0x00], 2,
+            |cpu| -> () {
+                assert_eq!(cpu.accumulator, 200);
+            }, 2, 6
+        );
+    }
 }
