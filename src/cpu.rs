@@ -31,6 +31,14 @@ pub struct Instruction {
 }
 
 impl Instruction {
+    pub fn new(op_code: u8, arguments: [u8; 2], size: u8) -> Instruction {
+        Instruction {
+            op_code,
+            arguments,
+            size,
+        }
+    }
+
     fn get_absolute_addr(&self) -> u16 {
         (self.arguments[0] as u16) << 8 & self.arguments[1] as u16
     }

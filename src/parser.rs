@@ -221,7 +221,23 @@ impl Parser {
         return out;
     }
 
-    pub fn parse_to_instructions(bytes: &[u8], instructions: &LinkedList<Instruction>) {
-        // TODO: insert all Instructions into the provided list
+    pub fn parse_to_instructions(&self, bytes: &[u8], instructions: &mut LinkedList<Instruction>) {
+        let mut index: usize = 0;
+        while index < bytes.len() {
+            let byte: u8 = bytes[index];
+            let len: u8 = *self.instruction_length_map.get(&byte).unwrap();
+
+            let array: [u8; 2];
+            if len == 1 {
+                array = [0, 0]
+            } else if len == 2 {
+                array = [bytes[index + 1], 0]
+            } else {
+                array = [bytes[index + 1], bytes[index + 2]]
+            }
+
+            instructions.push_back(Instruction::new(byte, array, len));
+            index += len as usize;
+        }
     }
 }
