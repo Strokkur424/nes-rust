@@ -1,3 +1,5 @@
+use std::fmt::{Debug, Formatter};
+
 pub struct Cpu {
     memory: [u8; 0xFFFF],
     program_counter: u16,
@@ -24,10 +26,10 @@ pub struct Cpu {
 
 /// Instruction reference: https://www.nesdev.org/wiki/Instruction_reference
 pub struct Instruction {
-    op_code: u8,
-    arguments: [u8; 2],
+    pub op_code: u8,
+    pub arguments: [u8; 2],
     // the number of bytes this instruction is long; used for incrementing the program counter
-    size: u8,
+    pub size: u8,
 }
 
 impl Instruction {

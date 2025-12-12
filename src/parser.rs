@@ -241,3 +241,56 @@ impl Parser {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_single() {
+        let parser: Parser = Parser::new();
+        let bytes: [u8; 7] = [0x49, 0x02, 0x45, 0x11, 0x59, 0x23, 0x43];
+        let mut linked_list: LinkedList<Instruction> = LinkedList::new();
+
+        parser.parse_to_instructions(&bytes, &mut linked_list);
+
+        assert_eq!(linked_list.len(), 3);
+
+        let first: Instruction = linked_list.pop_front().unwrap();
+        assert_eq!(first.op_code, 0x49);
+        assert_eq!(first.arguments, [0x02, 0x00]);
+        assert_eq!(first.size, 2);
+
+        let second: Instruction = linked_list.pop_front().unwrap();
+        assert_eq!(second.op_code, 0x45);
+        assert_eq!(second.arguments, [0x11, 0x00]);
+        assert_eq!(second.size, 2);
+
+        let third: Instruction = linked_list.pop_front().unwrap();
+        assert_eq!(third.op_code, 0x59);
+        assert_eq!(third.arguments, [0x23, 0x43]);
+        assert_eq!(third.size, 3);
+
+        assert_eq!(linked_list.len(), 0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_invalid_instruction() {
+        let parser: Parser = Parser::new();
+        let bytes: [u8; 1] = [0xFF];
+        let mut linked_list: LinkedList<Instruction> = LinkedList::new();
+
+        parser.parse_to_instructions(&bytes, &mut linked_list);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_insufficient_arguments() {
+        let parser: Parser = Parser::new();
+        let bytes: [u8; 2] = [0x2C, 0xFF]; // $2C is a 3 byte instruction
+        let mut linked_list: LinkedList<Instruction> = LinkedList::new();
+
+        parser.parse_to_instructions(&bytes, &mut linked_list);
+    }
+}
