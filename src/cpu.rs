@@ -227,7 +227,7 @@ impl Cpu {
                 self.cycle += 2;
             }
             0x58 => {
-                self.set_flag_interrupt(false);
+                self.change_interrupt_disable_flag = 0;
                 self.cycle += 2;
             }
             0xB8 => {
@@ -1021,6 +1021,19 @@ mod tests {
         );
     }
 
+    fn test_set<S, G>(op_code: u8, set: S, get: G, val: bool)
+    where
+        S: Fn(&mut Cpu, bool),
+        G: Fn(&Cpu) -> bool
+    {
+        test_inst(
+            |cpu| -> () { set(cpu, !val); },
+            op_code, [0, 0], 1,
+            |cpu| -> () { assert_eq!(get(cpu), val) },
+            1, 2
+        );
+    }
+
     fn test_zero_negative(cpu: &Cpu, result: u8) {
         assert_eq!(cpu.get_flag_zero(), result == 0);
         assert_eq!(cpu.get_flag_negative(), (result >> 7) & 1 == 1)
@@ -1485,5 +1498,71 @@ mod tests {
     #[test]
     fn test_bpl() {
         test_branch(0x10, Cpu::set_flag_negative, false);
+    }
+
+    #[test]
+    fn test_brk() {
+        let mut cpu = Cpu::new();
+        cpu.set_flag_negative(true);
+        cpu.set_flag_carry(true);
+        cpu.program_counter = 0xAB01;
+
+        assert_eq!(cpu.get_flag_interrupt(), false);
+
+        cpu.execute_instruction(&Instruction::new(0x00, [0, 0], 1));
+
+        assert_eq!(cpu.cycle, 7);
+        assert_eq!(cpu.program_counter, 0xFFFE);
+        assert_eq!(cpu.memory[cpu.stack_pointer as usize + 0x100 + 1], 0b10110001);
+        assert_eq!(cpu.memory[cpu.stack_pointer as usize + 0x100 + 2], 0x03);
+        assert_eq!(cpu.memory[cpu.stack_pointer as usize + 0x100 + 3], 0xAB);
+
+        assert_eq!(cpu.get_flag_interrupt(), true);
+    }
+
+    #[test]
+    fn test_bvc() {
+        test_branch(0x50, Cpu::set_flag_overflow, false);
+    }
+
+    #[test]
+    fn test_bvs() {
+        test_branch(0x70, Cpu::set_flag_overflow, true);
+    }
+
+    #[test]
+    fn test_clc() {
+        test_set(0x18, Cpu::set_flag_carry, Cpu::get_flag_carry, false);
+    }
+
+    #[test]
+    fn test_cld() {
+        test_set(0xD8, Cpu::set_flag_decimal, Cpu::get_flag_decimal, false);
+    }
+
+    #[test]
+    fn test_cli() {
+        let mut cpu = Cpu::new();
+        cpu.set_flag_interrupt(true);
+
+        assert_eq!(cpu.get_flag_interrupt(), true);
+
+        cpu.execute_instruction(&Instruction::new(0x58, [0, 0], 1));
+
+        assert_eq!(cpu.cycle, 2);
+        assert_eq!(cpu.program_counter, 1);
+
+        assert_eq!(cpu.get_flag_interrupt(), true); // the effect of CLI is delayed by one instruction
+        assert_eq!(cpu.change_interrupt_disable_flag, 0);
+
+        cpu.execute_instruction(&Instruction::new(0xEA, [0, 0], 1));
+
+        assert_eq!(cpu.get_flag_interrupt(), false);
+        assert_eq!(cpu.change_interrupt_disable_flag, -1);
+    }
+
+    #[test]
+    fn test_clv() {
+        test_set(0xB8, Cpu::set_flag_overflow, Cpu::get_flag_overflow, false);
     }
 }
