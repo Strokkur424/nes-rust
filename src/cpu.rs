@@ -994,6 +994,33 @@ mod tests {
         test(&cpu);
     }
 
+    fn test_branch<S: Fn(&mut Cpu, bool)>(op_code: u8, init: S, value: bool) {
+        test_inst(
+            |cpu| -> () {
+                cpu.program_counter = 0x20;
+                init(cpu, value);
+            },
+            op_code, [0x10, 0], 2,
+            no_test, 0x32, 3
+        );
+        test_inst(
+            |cpu| -> () {
+                cpu.program_counter = 0x20;
+                init(cpu, !value);
+            },
+            op_code, [0x10, 0], 2,
+            no_test, 0x22, 2
+        );
+        test_inst(
+            |cpu| -> () {
+                cpu.program_counter = 0x02F0;
+                init(cpu, value);
+            },
+            op_code, [0x20, 0], 2,
+            no_test, 0x0312, 4
+        );
+    }
+
     fn test_zero_negative(cpu: &Cpu, result: u8) {
         assert_eq!(cpu.get_flag_zero(), result == 0);
         assert_eq!(cpu.get_flag_negative(), (result >> 7) & 1 == 1)
@@ -1380,85 +1407,83 @@ mod tests {
 
     #[test]
     fn test_bcc() {
-        test_inst(
-            |cpu| -> () {
-                cpu.program_counter = 0x20;
-                cpu.set_flag_carry(false);
-            },
-            0x90, [0x10, 0], 2,
-            no_test, 0x32, 3
-        );
-        test_inst(
-            |cpu| -> () {
-                cpu.program_counter = 0x20;
-                cpu.set_flag_carry(true);
-            },
-            0x90, [0x10, 0], 2,
-            no_test, 0x22, 2
-        );
-        test_inst(
-            |cpu| -> () {
-                cpu.program_counter = 0x02F0;
-                cpu.set_flag_carry(false);
-            },
-            0x90, [0x20, 0], 2,
-            no_test, 0x0312, 4
-        );
+        test_branch(0x90, Cpu::set_flag_carry, false);
     }
 
     #[test]
     fn test_bcs() {
-        test_inst(
-            |cpu| -> () {
-                cpu.program_counter = 0x20;
-                cpu.set_flag_carry(true);
-            },
-            0xB0, [0x10, 0], 2,
-            no_test, 0x32, 3
-        );
-        test_inst(
-            |cpu| -> () {
-                cpu.program_counter = 0x20;
-                cpu.set_flag_carry(false);
-            },
-            0xB0, [0x10, 0], 2,
-            no_test, 0x22, 2
-        );
-        test_inst(
-            |cpu| -> () {
-                cpu.program_counter = 0x02F0;
-                cpu.set_flag_carry(true);
-            },
-            0xB0, [0x20, 0], 2,
-            no_test, 0x0312, 4
-        );
+        test_branch(0xB0, Cpu::set_flag_carry, true);
     }
 
     #[test]
     fn test_beq() {
+        test_branch(0xF0, Cpu::set_flag_zero, true);
+    }
+
+    #[test]
+    fn test_bit() {
         test_inst(
             |cpu| -> () {
-                cpu.program_counter = 0x20;
-                cpu.set_flag_zero(true);
+                cpu.accumulator = 0xFF;
+                cpu.memory[0x80] = 0;
             },
-            0xF0, [0x10, 0], 2,
-            no_test, 0x32, 3
+            0x24, [0x80, 0], 2,
+            |cpu| -> () {
+                assert_eq!(cpu.get_flag_zero(), true);
+                assert_eq!(cpu.get_flag_overflow(), false);
+                assert_eq!(cpu.get_flag_negative(), false);
+            }, 2, 3
         );
         test_inst(
             |cpu| -> () {
-                cpu.program_counter = 0x20;
-                cpu.set_flag_zero(false);
+                cpu.accumulator = 0xFF;
+                cpu.memory[0x80] = 0x80;
             },
-            0xF0, [0x10, 0], 2,
-            no_test, 0x22, 2
+            0x24, [0x80, 0], 2,
+            |cpu| -> () {
+                assert_eq!(cpu.get_flag_zero(), false);
+                assert_eq!(cpu.get_flag_overflow(), false);
+                assert_eq!(cpu.get_flag_negative(), true);
+            }, 2, 3
         );
         test_inst(
             |cpu| -> () {
-                cpu.program_counter = 0x02F0;
-                cpu.set_flag_zero(true);
+                cpu.accumulator = 0xFF;
+                cpu.memory[0x80] = 1 << 6;
             },
-            0xF0, [0x20, 0], 2,
-            no_test, 0x0312, 4
+            0x24, [0x80, 0], 2,
+            |cpu| -> () {
+                assert_eq!(cpu.get_flag_zero(), false);
+                assert_eq!(cpu.get_flag_overflow(), true);
+                assert_eq!(cpu.get_flag_negative(), false);
+            }, 2, 3
         );
+        test_inst(
+            |cpu| -> () {
+                cpu.accumulator = 0xFF;
+                cpu.memory[0x80] = 3 << 6;
+            },
+            0x24, [0x80, 0], 2,
+            |cpu| -> () {
+                assert_eq!(cpu.get_flag_zero(), false);
+                assert_eq!(cpu.get_flag_overflow(), true);
+                assert_eq!(cpu.get_flag_negative(), true);
+            }, 2, 3
+        );
+    }
+
+    #[test]
+    fn test_bmi() {
+        test_branch(0x30, Cpu::set_flag_negative, true);
+    }
+
+    #[test]
+    fn test_bne() {
+        test_branch(0xD0, Cpu::set_flag_zero, false);
+    }
+
+    #[test]
+    fn test_bpl() {
+        test_branch(0x10, Cpu::set_flag_negative, false);
     }
 }
