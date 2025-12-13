@@ -45,7 +45,7 @@ impl Instruction {
 }
 
 const BRANCHING_OP_CODES: [u8; 14] = [
-    0x90, 0x80, 0xF0, 0x30, 0xD0, 0x10, 0x00, 0x50, 0x70, 0x4C, 0x6C, 0x20, 0x40, 0x60,
+    0x90, 0xB0, 0xF0, 0x30, 0xD0, 0x10, 0x00, 0x50, 0x70, 0x4C, 0x6C, 0x20, 0x40, 0x60,
 ];
 
 fn increment_if_crossed_absolute(base: u32, addr: u16, inc: u8) -> u32 {
@@ -91,7 +91,7 @@ impl Cpu {
         if BRANCHING_OP_CODES.contains(&inst.op_code) {
             self.program_counter = match inst.op_code {
                 0x90 => self.branch_if_condition(inst.arguments[0], !self.get_flag_carry()),
-                0x80 => self.branch_if_condition(inst.arguments[0], self.get_flag_carry()),
+                0xB0 => self.branch_if_condition(inst.arguments[0], self.get_flag_carry()),
 
                 0xF0 => self.branch_if_condition(inst.arguments[0], self.get_flag_zero()),
                 0xD0 => self.branch_if_condition(inst.arguments[0], !self.get_flag_zero()),
@@ -627,7 +627,13 @@ impl Cpu {
         if !condition {
             self.program_counter + 2
         } else {
-            self.program_counter + 2 + value.cast_signed() as u16
+            let new_pc = self.program_counter + 2 + value.cast_signed() as u16;
+            self.cycle += if new_pc & 0xFF00 == self.program_counter & 0xFF00 {
+                1
+            } else {
+                2
+            };
+            new_pc
         }
     }
 
@@ -969,6 +975,8 @@ mod tests {
 
     //<editor-fold desc="Test Utility Methods">
     fn no_init(_: &mut Cpu) {}
+
+    fn no_test(_: &Cpu) {}
 
     fn test_inst<I, T>(
         init: I, op_code: u8, args: [u8; 2], size: u8, test: T, pc: u16, cycle: u32,
@@ -1367,6 +1375,90 @@ mod tests {
                 assert_eq!(cpu.get_flag_carry(), false);
                 val
             }, 7, false
+        );
+    }
+
+    #[test]
+    fn test_bcc() {
+        test_inst(
+            |cpu| -> () {
+                cpu.program_counter = 0x20;
+                cpu.set_flag_carry(false);
+            },
+            0x90, [0x10, 0], 2,
+            no_test, 0x32, 3
+        );
+        test_inst(
+            |cpu| -> () {
+                cpu.program_counter = 0x20;
+                cpu.set_flag_carry(true);
+            },
+            0x90, [0x10, 0], 2,
+            no_test, 0x22, 2
+        );
+        test_inst(
+            |cpu| -> () {
+                cpu.program_counter = 0x02F0;
+                cpu.set_flag_carry(false);
+            },
+            0x90, [0x20, 0], 2,
+            no_test, 0x0312, 4
+        );
+    }
+
+    #[test]
+    fn test_bcs() {
+        test_inst(
+            |cpu| -> () {
+                cpu.program_counter = 0x20;
+                cpu.set_flag_carry(true);
+            },
+            0xB0, [0x10, 0], 2,
+            no_test, 0x32, 3
+        );
+        test_inst(
+            |cpu| -> () {
+                cpu.program_counter = 0x20;
+                cpu.set_flag_carry(false);
+            },
+            0xB0, [0x10, 0], 2,
+            no_test, 0x22, 2
+        );
+        test_inst(
+            |cpu| -> () {
+                cpu.program_counter = 0x02F0;
+                cpu.set_flag_carry(true);
+            },
+            0xB0, [0x20, 0], 2,
+            no_test, 0x0312, 4
+        );
+    }
+
+    #[test]
+    fn test_beq() {
+        test_inst(
+            |cpu| -> () {
+                cpu.program_counter = 0x20;
+                cpu.set_flag_zero(true);
+            },
+            0xF0, [0x10, 0], 2,
+            no_test, 0x32, 3
+        );
+        test_inst(
+            |cpu| -> () {
+                cpu.program_counter = 0x20;
+                cpu.set_flag_zero(false);
+            },
+            0xF0, [0x10, 0], 2,
+            no_test, 0x22, 2
+        );
+        test_inst(
+            |cpu| -> () {
+                cpu.program_counter = 0x02F0;
+                cpu.set_flag_zero(true);
+            },
+            0xF0, [0x20, 0], 2,
+            no_test, 0x0312, 4
         );
     }
 }
