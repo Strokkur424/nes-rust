@@ -193,7 +193,7 @@ impl Cpu {
                 increment_if_crossed_indirect_indexed(5, inst.arguments[0], self),
             ),
 
-            0x0A => self.execute_asl(self.accumulator, |cpu, r| -> () { cpu.accumulator += r }, 2),
+            0x0A => self.execute_asl(self.accumulator, |cpu, r| -> () { cpu.accumulator = r }, 2),
             0x06 => self.execute_asl(
                 self.get_addr_zero(inst.arguments[0]),
                 |cpu, r| -> () { cpu.set_addr_zero(inst.arguments[0], r) },
@@ -210,7 +210,7 @@ impl Cpu {
                 6,
             ),
             0x1E => self.execute_asl(
-                self.get_addr_absolute(inst.get_absolute_addr()),
+                self.get_addr_absolute_x(inst.get_absolute_addr()),
                 |cpu, r| -> () { cpu.set_addr_absolute_x(inst.get_absolute_addr(), r) },
                 7,
             ),
@@ -614,7 +614,7 @@ impl Cpu {
     where
         R: Fn(&mut Cpu, u8),
     {
-        let result: u8 = (value << 1) & 0b1111_1110;
+        let result: u8 = value << 1;
         self.set_flag_carry((value >> 7) & 1 == 1);
         self.set_flag_zero(result == 0);
         self.set_flag_negative_by_val(result);
@@ -991,8 +991,21 @@ mod tests {
         assert_eq!(cpu.get_flag_negative(), (result >> 7) & 1 == 1)
     }
 
+    fn test_accumulator<M>(
+         op_code: u8, acc: u8, check_value: M, cycles: u32
+    ) where
+        M: Fn(&Cpu, u8) -> u8
+    {
+        test_inst(
+            |cpu| -> () { cpu.accumulator = acc },
+            op_code, [0, 0], 1,
+            |cpu| -> () { test_zero_negative(cpu, check_value(cpu, cpu.accumulator)); },
+            1, cycles
+        );
+    }
+
     fn test_immediate<M, I>(
-         init: I, op_code: u8, val: u8, check_value: M
+         init: I, op_code: u8, val: u8, check_value: M, cycles: u32
     ) where
         I: Fn(&mut Cpu),
         M: Fn(&Cpu, u8) -> u8
@@ -1001,12 +1014,12 @@ mod tests {
             init,
             op_code, [val, 0x00], 2,
             |cpu| -> () { test_zero_negative(cpu, check_value(cpu, val)); },
-            2, 2
+            2, cycles
         );
     }
 
     fn test_zero_page<M, I>(
-        init: I, op_code: u8, val: u8, check_value: M
+        init: I, op_code: u8, val: u8, check_value: M, cycles: u32
     ) where
         I: Fn(&mut Cpu),
         M: Fn(&Cpu, u8) -> u8
@@ -1018,12 +1031,12 @@ mod tests {
             },
             op_code, [val, 0x00], 2,
             |cpu| -> () { test_zero_negative(cpu, check_value(cpu, cpu.memory[val as usize])) },
-            2, 3
+            2, cycles
         );
     }
 
     fn test_zero_page_x<M, I>(
-        init: I, op_code: u8, val: u8, check_value: M
+        init: I, op_code: u8, val: u8, check_value: M, cycles: u32
     ) where
         I: Fn(&mut Cpu),
         M: Fn(&Cpu, u8) -> u8
@@ -1031,17 +1044,17 @@ mod tests {
         test_inst(
             |cpu| -> () {
                 cpu.index_x = 10;
-                cpu.memory[val as usize + cpu.index_x as usize] = 10;
+                cpu.memory[val as usize + cpu.index_x as usize] = 0x10;
                 init(cpu);
             },
             op_code, [val, 0x00], 2,
             |cpu| -> () { test_zero_negative(cpu, check_value(cpu, cpu.memory[val as usize + cpu.index_x as usize])) },
-            2, 4
+            2, cycles
         );
     }
 
     fn test_absolute<M, I>(
-        init: I, op_code: u8, val: u16, check_value: M
+        init: I, op_code: u8, val: u16, check_value: M, cycles: u32
     ) where
         I: Fn(&mut Cpu),
         M: Fn(&Cpu, u8) -> u8
@@ -1049,17 +1062,17 @@ mod tests {
         let bytes = val.to_be_bytes();
         test_inst(
             |cpu| -> () {
-                cpu.memory[val as usize] = 10;
+                cpu.memory[val as usize] = 0x10;
                 init(cpu);
             },
             op_code, bytes, 3,
             |cpu| -> () { test_zero_negative(cpu, check_value(cpu, cpu.memory[val as usize])) },
-            3, 4
+            3, cycles
         );
     }
 
     fn test_absolute_x<M, I>(
-        init: I, op_code: u8, val: u16, check_value: M, cross_page: bool
+        init: I, op_code: u8, val: u16, check_value: M, cycles: u32, cross_page: bool
     ) where
         I: Fn(&mut Cpu),
         M: Fn(&Cpu, u8) -> u8
@@ -1069,16 +1082,16 @@ mod tests {
             |cpu| -> () {
                 cpu.index_x = if cross_page { 0xF0 } else { 0x10 };
                 init(cpu);
-                cpu.memory[val as usize + cpu.index_x as usize] = 10;
+                cpu.memory[val as usize + cpu.index_x as usize] = 0x10;
             },
             op_code, bytes, 3,
             |cpu| -> () { test_zero_negative(cpu, check_value(cpu, cpu.memory[val as usize + cpu.index_x as usize])) },
-            3, if cross_page { 5 } else { 4 }
+            3, if cross_page { cycles + 1 } else { cycles }
         );
     }
 
     fn test_absolute_y<M, I>(
-        init: I, op_code: u8, val: u16, check_value: M, cross_page: bool
+        init: I, op_code: u8, val: u16, check_value: M, cycles: u32, cross_page: bool
     ) where
         I: Fn(&mut Cpu),
         M: Fn(&Cpu, u8) -> u8
@@ -1088,17 +1101,17 @@ mod tests {
             |cpu| -> () {
                 cpu.index_y = if cross_page { 0xF0 } else { 0x10 };
                 init(cpu);
-                cpu.memory[val as usize + cpu.index_y as usize] = 10;
+                cpu.memory[val as usize + cpu.index_y as usize] = 0x10;
             },
             op_code, bytes, 3,
             |cpu| -> () { test_zero_negative(cpu, check_value(cpu, cpu.memory[val as usize + cpu.index_y as usize])) },
-            3, if cross_page { 5 } else { 4 }
+            3, if cross_page { cycles + 1 } else { cycles }
         );
     }
 
     /// (Indirect,X)
     fn test_indirect_indexed<M, I>(
-        init: I, op_code: u8, val: u8, check_value: M
+        init: I, op_code: u8, val: u8, check_value: M, cycles: u32
     ) where
         I: Fn(&mut Cpu),
         M: Fn(&Cpu, u8) -> u8
@@ -1110,17 +1123,17 @@ mod tests {
                 init(cpu);
                 cpu.memory[(val + cpu.index_x) as usize & 0xFF] = 0x10;
                 cpu.memory[(val + cpu.index_x + 1) as usize & 0xFF] = 0x20;
-                cpu.memory[0x2010] = 50;
+                cpu.memory[0x2010] = 0x50;
             },
             op_code, [val, 0], 2,
             |cpu| -> () { test_zero_negative(cpu, check_value(cpu, cpu.memory[0x2010])) },
-            2, 6
+            2, cycles
         );
     }
 
     /// (Indirect),Y
     fn test_indexed_indirect<M, I>(
-        init: I, op_code: u8, val: u8, check_value: M, cross_page: bool
+        init: I, op_code: u8, val: u8, check_value: M, cycles: u32, cross_page: bool
     ) where
         I: Fn(&mut Cpu),
         M: Fn(&Cpu, u8) -> u8
@@ -1133,11 +1146,11 @@ mod tests {
                 init(cpu);
                 cpu.memory[val as usize] = 0x10;
                 cpu.memory[val as usize + 1] = 0x20;
-                cpu.memory[0x2010 + cpu.index_y as usize] = 50;
+                cpu.memory[0x2010 + cpu.index_y as usize] = 0x50;
             },
             op_code, [val, 0], 2,
             |cpu| -> () { test_zero_negative(cpu, check_value(cpu, cpu.memory[0x2010 + cpu.index_y as usize])) },
-            2, if cross_page { 6 } else { 5 }
+            2, if cross_page { cycles + 1 } else { cycles }
         );
     }
     //</editor-fold>
@@ -1150,7 +1163,7 @@ mod tests {
             |cpu, val| -> u8 {
                 assert_eq!(cpu.accumulator, val);
                 cpu.accumulator
-            }
+            }, 2
         );
         test_zero_page(
             |cpu| -> () {
@@ -1164,7 +1177,7 @@ mod tests {
                 assert_eq!(cpu.get_flag_carry(), true);
                 assert_eq!(cpu.get_flag_overflow(), true);
                 cpu.accumulator
-            }
+            }, 3
         );
         test_zero_page_x(
             |cpu| -> () { cpu.accumulator = 10; },
@@ -1172,7 +1185,7 @@ mod tests {
             |cpu, val| -> u8 {
                 assert_eq!(cpu.accumulator, val + 10);
                 cpu.accumulator
-            }
+            }, 4
         );
         test_absolute(
             |cpu| -> () { cpu.accumulator = 30; },
@@ -1180,7 +1193,7 @@ mod tests {
             |cpu, val| -> u8 {
                 assert_eq!(cpu.accumulator, val + 30);
                 cpu.accumulator
-            }
+            }, 4
         );
         test_absolute_x(
             |cpu| -> () { cpu.accumulator = 10 },
@@ -1188,7 +1201,7 @@ mod tests {
             |cpu, val| -> u8 {
                 assert_eq!(cpu.accumulator, val + 10);
                 cpu.accumulator
-            }, false
+            }, 4, false
         );
         test_absolute_y(
             |cpu| -> () { cpu.accumulator = 40 },
@@ -1196,7 +1209,7 @@ mod tests {
             |cpu, val| -> u8 {
                 assert_eq!(cpu.accumulator, val + 40);
                 cpu.accumulator
-            }, true
+            }, 4, true
         );
         test_indirect_indexed(
             |cpu| -> () { cpu.accumulator = 20 },
@@ -1204,7 +1217,7 @@ mod tests {
             |cpu, val| -> u8 {
                 assert_eq!(cpu.accumulator, val + 20);
                 cpu.accumulator
-            }
+            }, 6
         );
         test_indexed_indirect(
             |cpu| -> () { cpu.accumulator = 20 },
@@ -1212,14 +1225,14 @@ mod tests {
             |cpu, val| -> u8 {
                 assert_eq!(cpu.accumulator, val + 20);
                 cpu.accumulator
-            }, false
+            }, 5, false
         );test_indexed_indirect(
             |cpu| -> () { cpu.accumulator = 20 },
             0x71, 0xBA,
             |cpu, val| -> u8 {
                 assert_eq!(cpu.accumulator, val + 20);
                 cpu.accumulator
-            }, true
+            }, 5, true
         );
     }
 
@@ -1231,7 +1244,7 @@ mod tests {
             |cpu, _val| -> u8 {
                 assert_eq!(cpu.accumulator, 0);
                 cpu.accumulator
-            }
+            }, 2
         );
         test_zero_page(
             |cpu| -> () { cpu.accumulator = 0x0F },
@@ -1239,7 +1252,7 @@ mod tests {
             |cpu, val| -> u8 {
                 assert_eq!(cpu.accumulator, val & 0x0F);
                 cpu.accumulator
-            }
+            }, 3
         );
         test_zero_page_x(
             |cpu| -> () { cpu.accumulator = 0xFF },
@@ -1247,7 +1260,7 @@ mod tests {
             |cpu, val| -> u8 {
                 assert_eq!(cpu.accumulator, val & 0xFF);
                 cpu.accumulator
-            }
+            }, 4
         );
         test_absolute(
             |cpu| -> () { cpu.accumulator = 0x12 },
@@ -1255,7 +1268,7 @@ mod tests {
             |cpu, val| -> u8 {
                 assert_eq!(cpu.accumulator, val & 0x12);
                 cpu.accumulator
-            }
+            }, 4
         );
         test_absolute_x(
             |cpu| -> () { cpu.accumulator = 0x21; },
@@ -1263,7 +1276,7 @@ mod tests {
             |cpu, val| -> u8 {
                 assert_eq!(cpu.accumulator, val & 0x21);
                 cpu.accumulator
-            }, false
+            }, 4, false
         );
         test_absolute_y(
             |cpu| -> () { cpu.accumulator = 0x21; },
@@ -1271,7 +1284,7 @@ mod tests {
             |cpu, val| -> u8 {
                 assert_eq!(cpu.accumulator, val & 0x21);
                 cpu.accumulator
-            }, true
+            }, 4, true
         );
         test_indirect_indexed(
             |cpu| -> () { cpu.accumulator = 0x72; },
@@ -1279,7 +1292,7 @@ mod tests {
             |cpu, val| -> u8 {
                 assert_eq!(cpu.accumulator, val & 0x72);
                 cpu.accumulator
-            }
+            }, 6
         );
         test_indexed_indirect(
             |cpu| -> () { cpu.accumulator = 0xF2; },
@@ -1287,7 +1300,7 @@ mod tests {
             |cpu, val| -> u8 {
                 assert_eq!(cpu.accumulator, val & 0xF2);
                 cpu.accumulator
-            }, true
+            }, 5, true
         );
         test_indexed_indirect(
             |cpu| -> () { cpu.accumulator = 0xA2; },
@@ -1295,8 +1308,65 @@ mod tests {
             |cpu, val| -> u8 {
                 assert_eq!(cpu.accumulator, val & 0xA2);
                 cpu.accumulator
-            }, false
+            }, 5, false
         );
     }
 
+    #[test]
+    fn test_asl() {
+        test_accumulator(
+            0x0A, 0x9B,
+            |cpu, val| -> u8 {
+                let expected = 0x9B << 1;
+                assert_eq!(val, expected);
+                assert_eq!(cpu.get_flag_carry(), true);
+                val
+            }, 2
+        );
+        test_zero_page(
+            no_init,
+            0x06, 0x21,
+            |cpu, val| -> u8 {
+                assert_eq!(val, 0x10 << 1);
+                assert_eq!(cpu.get_flag_carry(), false);
+                val
+            }, 5
+        );
+        test_zero_page_x(
+            no_init,
+            0x16, 0x21,
+            |cpu, val| -> u8 {
+                assert_eq!(val, 0x10 << 1);
+                assert_eq!(cpu.get_flag_carry(), false);
+                val
+            }, 6
+        );
+        test_absolute(
+            no_init,
+            0x0E, 0x2112,
+            |cpu, val| -> u8 {
+                assert_eq!(val, 0x10 << 1);
+                assert_eq!(cpu.get_flag_carry(), false);
+                val
+            }, 6
+        );
+        test_absolute_x(
+            no_init,
+            0x1E, 0x21FF,
+            |cpu, val| -> u8 {
+                assert_eq!(val, 0x10 << 1);
+                assert_eq!(cpu.get_flag_carry(), false);
+                val
+            }, 7, false
+        );
+        test_absolute_x(
+            no_init,
+            0x1E, 0x2100,
+            |cpu, val| -> u8 {
+                assert_eq!(val, 0x10 << 1);
+                assert_eq!(cpu.get_flag_carry(), false);
+                val
+            }, 7, false
+        );
+    }
 }
