@@ -120,7 +120,12 @@ impl Cpu {
                     self.cycle += 3;
                     self.get_addr_absolute(inst.get_absolute_addr()) as u16
                 }
-                0x6C => panic!("Indirect jmp instruction is not supported yet."), // TODO: Implement this
+                0x6C => {
+                    self.cycle += 5;
+                    // TODO: implement JMP hardware bug
+                    let addr: usize = inst.get_absolute_addr() as usize;
+                    u16::from_be_bytes([self.memory[addr + 1], self.memory[addr]])
+                }
 
                 0x20 => {
                     // jsr
@@ -343,7 +348,7 @@ impl Cpu {
             0xAE => self.execute_ldx(self.get_addr_absolute(inst.get_absolute_addr()), 4),
             0xBE => self.execute_ldx(
                 self.get_addr_absolute_y(inst.get_absolute_addr()),
-                increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_y),
+                increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_x),
             ),
 
             0xA0 => self.execute_ldy(inst.arguments[0], 2),
@@ -833,7 +838,7 @@ impl Cpu {
         self.memory[self.get_addr_zero_x_index(arg) as usize]
     }
     fn get_addr_zero_x_index(&self, arg: u8) -> u8 {
-        (arg + self.index_x) % 0xFF
+        (((arg as u16 & 0xFF) + (self.index_x as u16 & 0xFF)) % 0xFF) as u8
     }
     fn get_addr_zero_y(&self, arg: u8) -> u8 {
         self.memory[self.get_addr_zero_y_index(arg) as usize]
@@ -973,6 +978,7 @@ impl Cpu {
 #[rustfmt::skip]
 mod tests {
 use std::hint::assert_unchecked;
+use std::ops::Deref;
 use implicit_fn::implicit_fn;
 use crate::cpu::{Cpu, Instruction};
 
@@ -1131,11 +1137,11 @@ use crate::cpu::{Cpu, Instruction};
         test_inst(
             |cpu| -> () {
                 cpu.index_x = 10;
-                cpu.memory[val as usize + cpu.index_x as usize] = 0x10;
+                cpu.memory[((val as usize & 0xFF) + (cpu.index_x as usize & 0xFF)) % 0xFF] = 0x10;
                 init(cpu);
             },
             op_code, [val, 0x00], 2,
-            |cpu| -> () { test_zero_negative(cpu, check_value(cpu, cpu.memory[val as usize + cpu.index_x as usize])) },
+            |cpu| -> () { test_zero_negative(cpu, check_value(cpu, cpu.memory[((val as usize & 0xFF) + (cpu.index_x as usize & 0xFF)) % 0xFF])) },
             2, cycles
         );
     }
@@ -2026,6 +2032,182 @@ use crate::cpu::{Cpu, Instruction};
                 assert_eq!(cpu.get_flag_zero(), false);
                 assert_eq!(cpu.get_flag_negative(), true);
             }, 1, 2
+        );
+    }
+
+    #[test]
+    fn test_jmp() {
+        test_inst(
+            |cpu| -> () { cpu.memory[0xABCD] = 0x24 },
+            0x4C, [0xAB, 0xCD], 3,
+            no_test,
+            0x24, 3
+        );
+        test_inst(
+            |cpu| -> () {
+                cpu.memory[0xAABB] = 0x23;
+                cpu.memory[0xAABC] = 0x11;
+            },
+            0x6C, [0xAA, 0xBB], 3,
+            no_test,
+            0x1123, 5
+        );
+    }
+
+    #[test]
+    fn test_jsr() {
+        test_inst(
+            |cpu| -> () {
+                cpu.memory[0xABCD] = 0x24;
+                cpu.program_counter = 0xAABB;
+            },
+            0x20, [0xAB, 0xCD], 3,
+            |cpu| -> () {
+                assert_eq!(cpu.memory[cpu.stack_pointer as usize + 1 + 0x0100], 0xBB + 2);
+                assert_eq!(cpu.memory[cpu.stack_pointer as usize + 2 + 0x0100], 0xAA);
+            },
+            0x24, 6
+        );
+    }
+
+    #[test]
+    fn test_lda() {
+        let test = |cpu: &Cpu, val: u8| -> u8 {
+            assert_eq!(cpu.accumulator, val);
+            val
+        };
+
+        test_immediate(
+            no_init,
+            0xA9, 0x20,
+            test, 2
+        );
+        test_zero_page(
+            no_init,
+            0xA5, 0x90,
+            test, 3
+        );
+        test_zero_page_x(
+            no_init,
+            0xB5, 0xFF,
+            test, 4
+        );
+        test_absolute(
+            no_init,
+            0xAD, 0x1190,
+            test, 4
+        );
+        test_absolute_x(
+            no_init,
+            0xBD, 0xFF,
+            test, 4, true
+        );
+        test_absolute_x(
+            no_init,
+            0xBD, 0x1F,
+            test, 4, false
+        );
+        test_absolute_y(
+            no_init,
+            0xB9, 0x7F,
+            test, 4, true
+        );
+        test_absolute_y(
+            no_init,
+            0xB9, 0x1F,
+            test, 4, false
+        );
+        test_indirect_indexed(
+            no_init,
+            0xA1, 0x22,
+            test, 6
+        );
+        test_indexed_indirect(
+            no_init,
+            0xB1, 0x7F,
+            test, 5, true
+        );
+        test_indexed_indirect(
+            no_init,
+            0xB1, 0x1F,
+            test, 5, false
+        );
+    }
+
+    #[test]
+    fn test_ldx() {
+        let test = |cpu: &Cpu, val: u8| -> u8 {
+            assert_eq!(cpu.index_x, val);
+            val
+        };
+
+        test_immediate(
+            no_init,
+            0xA2, 25,
+            test, 2
+        );
+        test_zero_page(
+            no_init,
+            0xA6, 15,
+            test, 3
+        );
+        test_zero_page_x(
+            no_init,
+            0xB6, 155,
+            test, 4
+        );
+        test_absolute(
+            no_init,
+            0xAE, 0xAABC,
+            test, 4
+        );
+        test_absolute_x(
+            no_init,
+            0xBE, 0xAABC,
+            test, 4, false
+        );
+        test_absolute_x(
+            no_init,
+            0xBE, 0xAAFC,
+            test, 4, true
+        );
+    }
+    #[test]
+    fn test_ldy() {
+        let test = |cpu: &Cpu, val: u8| -> u8 {
+            assert_eq!(cpu.index_y, val);
+            val
+        };
+
+        test_immediate(
+            no_init,
+            0xA2, 25,
+            test, 2
+        );
+        test_zero_page(
+            no_init,
+            0xA6, 15,
+            test, 3
+        );
+        test_zero_page_x(
+            no_init,
+            0xB6, 155,
+            test, 4
+        );
+        test_absolute(
+            no_init,
+            0xAE, 0xAABC,
+            test, 4
+        );
+        test_absolute_x(
+            no_init,
+            0xBE, 0xAABC,
+            test, 4, false
+        );
+        test_absolute_x(
+            no_init,
+            0xBE, 0xAAFC,
+            test, 4, true
         );
     }
 }
