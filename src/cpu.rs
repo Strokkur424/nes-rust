@@ -420,6 +420,7 @@ impl Cpu {
             0x28 => {
                 let val: u8 = self.pop();
                 self.set_processor_status(val, true);
+                self.cycle += 4;
             }
 
             0x2A => self.execute_rol(self.accumulator, |cpu, r| -> () { cpu.accumulator = r }, 2),
@@ -813,15 +814,15 @@ impl Cpu {
 
     fn set_processor_status(&mut self, flags: u8, delay: bool) {
         self.set_flag_carry(flags & 1 == 1);
-        self.set_flag_zero((flags << 1) & 1 == 1);
+        self.set_flag_zero((flags >> 1) & 1 == 1);
         if delay {
-            self.change_interrupt_disable_flag = ((flags << 2) & 1) as i8;
+            self.change_interrupt_disable_flag = ((flags >> 2) & 1) as i8;
         } else {
-            self.set_flag_interrupt((flags << 2) & 1 == 1);
+            self.set_flag_interrupt((flags >> 2) & 1 == 1);
         }
-        self.set_flag_decimal((flags << 3) & 1 == 1);
-        self.set_flag_overflow((flags << 6) & 1 == 1);
-        self.set_flag_negative((flags << 7) & 1 == 1);
+        self.set_flag_decimal((flags >> 3) & 1 == 1);
+        self.set_flag_overflow((flags >> 6) & 1 == 1);
+        self.set_flag_negative((flags >> 7) & 1 == 1);
     }
 
     //<editor-fold desc="Addressing">
@@ -985,13 +986,13 @@ use crate::cpu::{Cpu, Instruction};
     //<editor-fold desc="Test Utility Methods">
     fn no_init(_: &mut Cpu) {}
 
-    fn no_test(_: &Cpu) {}
+    fn no_test(_: &mut Cpu) {}
 
     fn test_inst<I, T>(
         init: I, op_code: u8, args: [u8; 2], size: u8, test: T, pc: u16, cycle: u32,
     ) where
         I: Fn(&mut Cpu) -> (),
-        T: Fn(&Cpu) -> (),
+        T: Fn(&mut Cpu) -> (),
     {
         let mut cpu = Cpu::new();
         init(&mut cpu);
@@ -1000,7 +1001,7 @@ use crate::cpu::{Cpu, Instruction};
 
         assert_eq!(cpu.cycle, cycle);
         assert_eq!(cpu.program_counter, pc);
-        test(&cpu);
+        test(&mut cpu);
     }
 
     fn test_branch<S: Fn(&mut Cpu, bool)>(op_code: u8, init: S, value: bool) {
@@ -2212,7 +2213,6 @@ use crate::cpu::{Cpu, Instruction};
     }
 
     #[test]
-    #[implicit_fn]
     fn test_lsr() {
         test_accumulator(
             0x4A, 0x9B,
@@ -2242,7 +2242,7 @@ use crate::cpu::{Cpu, Instruction};
             }, 6
         );
         test_absolute(
-            _.memory[0x2112] = 0x11,
+            |cpu| cpu.memory[0x2112] = 0x11,
             0x4E, 0x2112,
             |cpu, val| -> u8 {
                 assert_eq!(val, 0x11 >> 1);
@@ -2251,7 +2251,7 @@ use crate::cpu::{Cpu, Instruction};
             }, 6
         );
         test_absolute_x(
-            |cpu| -> () { cpu.memory[0x21FF + cpu.index_x as usize] = 0x9 },
+            |cpu| cpu.memory[0x21FF + cpu.index_x as usize] = 0x9,
             0x5E, 0x21FF,
             |cpu, val| -> u8 {
                 assert_eq!(val, 0x9 >> 1);
@@ -2260,13 +2260,97 @@ use crate::cpu::{Cpu, Instruction};
             }, 7, false
         );
         test_absolute_x(
-            |cpu| -> () { cpu.memory[0x2100 + cpu.index_x as usize] = 0xFF },
+            |cpu| cpu.memory[0x2100 + cpu.index_x as usize] = 0xFF,
             0x5E, 0x2100,
             |cpu, val| -> u8 {
                 assert_eq!(val, 0xFF >> 1);
                 assert_eq!(cpu.get_flag_carry(), true);
                 val
             }, 7, false
+        );
+    }
+
+    #[test]
+    fn test_nop() {
+        test_inst(
+            no_init,
+            0xEA, [0, 0], 1,
+            no_test, 1, 2
+        );
+    }
+
+    #[test]
+    #[implicit_fn]
+    fn test_ora() {
+        test_all(
+            0x09,
+            0x05, 0x15, 0,
+            0x0D, 0x1D, 0x19,
+            0x01, 0x11,
+            _.accumulator = _, _.accumulator, _ | _,
+            0xAA
+        );
+    }
+
+    #[test]
+    fn test_pha() {
+        test_inst(
+            |cpu| cpu.accumulator = 0x25,
+            0x48, [0, 0], 1,
+            |cpu| -> () {
+                assert_eq!(cpu.stack_pointer, 0xFF - 1);
+                assert_eq!(cpu.memory[0x0100 + cpu.stack_pointer as usize + 1], 0x25);
+            }, 1, 3
+        );
+    }
+
+    #[test]
+    fn test_php() {
+        test_inst(
+            |cpu| cpu.set_flag_decimal(true),
+            0x08, [0, 0], 1,
+            |cpu| -> () {
+                assert_eq!(cpu.stack_pointer, 0xFF - 1);
+                assert_eq!(cpu.memory[0x0100 + cpu.stack_pointer as usize + 1], 0b00111000);
+            }, 1, 3
+        );
+    }
+
+    #[test]
+    fn test_pla() {
+        test_inst(
+            |cpu| cpu.push(0x25),
+            0x68, [0, 0], 1,
+            |cpu| -> () {
+                assert_eq!(cpu.stack_pointer, 0xFF);
+                assert_eq!(cpu.accumulator, 0x25);
+            }, 1, 4
+        );
+    }
+
+    #[test]
+    fn test_plp() {
+        test_inst(
+            |cpu| cpu.push(0b1111_0101),
+            0x28, [0, 0], 1,
+            |cpu| -> () {
+                assert_eq!(cpu.stack_pointer, 0xFF);
+                assert_eq!(cpu.get_flag_negative(), true);
+                assert_eq!(cpu.get_flag_overflow(), true);
+                assert_eq!(cpu.get_flag_decimal(), false);
+
+                // This flag is delayed
+                assert_eq!(cpu.get_flag_interrupt(), false);
+                assert_eq!(cpu.change_interrupt_disable_flag, 1);
+
+                assert_eq!(cpu.get_flag_zero(), false);
+                assert_eq!(cpu.get_flag_carry(), true);
+
+                // nop to waste time
+                cpu.execute_instruction(&Instruction::new(0xEA, [0, 0], 1));
+
+                assert_eq!(cpu.get_flag_interrupt(), true); // the flag was delayed
+            }, 1, 4
         );
     }
 }
