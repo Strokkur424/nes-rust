@@ -348,7 +348,7 @@ impl Cpu {
             0xAE => self.execute_ldx(self.get_addr_absolute(inst.get_absolute_addr()), 4),
             0xBE => self.execute_ldx(
                 self.get_addr_absolute_y(inst.get_absolute_addr()),
-                increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_x),
+                increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_y),
             ),
 
             0xA0 => self.execute_ldy(inst.arguments[0], 2),
@@ -369,17 +369,17 @@ impl Cpu {
             0x56 => self.execute_lsr(
                 self.get_addr_zero_x(inst.arguments[0]),
                 |cpu, r| -> () { cpu.set_addr_zero_x(inst.arguments[0], r) },
-                5,
+                6,
             ),
             0x4E => self.execute_lsr(
                 self.get_addr_absolute(inst.get_absolute_addr()),
                 |cpu, r| -> () { cpu.set_addr_absolute(inst.get_absolute_addr(), r) },
-                5,
+                6,
             ),
             0x5E => self.execute_lsr(
                 self.get_addr_absolute_x(inst.get_absolute_addr()),
                 |cpu, r| -> () { cpu.set_addr_absolute_x(inst.get_absolute_addr(), r) },
-                5,
+                7,
             ),
 
             0xEA => self.cycle += 2, // nop
@@ -724,9 +724,9 @@ impl Cpu {
         R: Fn(&mut Cpu, u8),
     {
         let result: u8 = (value >> 1) & !(1 >> 1);
-        self.set_flag_carry(false);
-        self.set_flag_zero(result == 0);
-        self.set_flag_negative(false);
+        self.set_flag_carry(value & 1 == 1);
+        self.set_flag_zero_by_val(result);
+        self.set_flag_negative_by_val(result);
         r(self, result);
         self.cycle += cycles
     }
@@ -1192,8 +1192,8 @@ use crate::cpu::{Cpu, Instruction};
         test_inst(
             |cpu| -> () {
                 cpu.index_x = if cross_page { 0xF0 } else { 0x10 };
-                init(cpu);
                 cpu.memory[val as usize + cpu.index_x as usize] = 0x10;
+                init(cpu);
             },
             op_code, bytes, 3,
             |cpu| -> () { test_zero_negative(cpu, check_value(cpu, cpu.memory[val as usize + cpu.index_x as usize])) },
@@ -1211,8 +1211,8 @@ use crate::cpu::{Cpu, Instruction};
         test_inst(
             |cpu| -> () {
                 cpu.index_y = if cross_page { 0xF0 } else { 0x10 };
-                init(cpu);
                 cpu.memory[val as usize + cpu.index_y as usize] = 0x10;
+                init(cpu);
             },
             op_code, bytes, 3,
             |cpu| -> () { test_zero_negative(cpu, check_value(cpu, cpu.memory[val as usize + cpu.index_y as usize])) },
@@ -2151,7 +2151,7 @@ use crate::cpu::{Cpu, Instruction};
             0xA6, 15,
             test, 3
         );
-        test_zero_page_x(
+        test_zero_page_y(
             no_init,
             0xB6, 155,
             test, 4
@@ -2161,12 +2161,12 @@ use crate::cpu::{Cpu, Instruction};
             0xAE, 0xAABC,
             test, 4
         );
-        test_absolute_x(
+        test_absolute_y(
             no_init,
             0xBE, 0xAABC,
             test, 4, false
         );
-        test_absolute_x(
+        test_absolute_y(
             no_init,
             0xBE, 0xAAFC,
             test, 4, true
@@ -2181,33 +2181,92 @@ use crate::cpu::{Cpu, Instruction};
 
         test_immediate(
             no_init,
-            0xA2, 25,
+            0xA0, 25,
             test, 2
         );
         test_zero_page(
             no_init,
-            0xA6, 15,
+            0xA4, 15,
             test, 3
         );
         test_zero_page_x(
             no_init,
-            0xB6, 155,
+            0xB4, 155,
             test, 4
         );
         test_absolute(
             no_init,
-            0xAE, 0xAABC,
+            0xAC, 0xAABC,
             test, 4
         );
         test_absolute_x(
             no_init,
-            0xBE, 0xAABC,
+            0xBC, 0xAABC,
             test, 4, false
         );
         test_absolute_x(
             no_init,
-            0xBE, 0xAAFC,
+            0xBC, 0xAAFC,
             test, 4, true
+        );
+    }
+
+    #[test]
+    #[implicit_fn]
+    fn test_lsr() {
+        test_accumulator(
+            0x4A, 0x9B,
+            |cpu, val| -> u8 {
+                let expected = 0x9B >> 1;
+                assert_eq!(val, expected);
+                assert_eq!(cpu.get_flag_carry(), true);
+                val
+            }, 2
+        );
+        test_zero_page(
+            no_init,
+            0x46, 0x21,
+            |cpu, val| -> u8 {
+                assert_eq!(val, 0x10 >> 1);
+                assert_eq!(cpu.get_flag_carry(), false);
+                val
+            }, 5
+        );
+        test_zero_page_x(
+            no_init,
+            0x56, 0x21,
+            |cpu, val| -> u8 {
+                assert_eq!(val, 0x10 >> 1);
+                assert_eq!(cpu.get_flag_carry(), false);
+                val
+            }, 6
+        );
+        test_absolute(
+            _.memory[0x2112] = 0x11,
+            0x4E, 0x2112,
+            |cpu, val| -> u8 {
+                assert_eq!(val, 0x11 >> 1);
+                assert_eq!(cpu.get_flag_carry(), true);
+                val
+            }, 6
+        );
+        test_absolute_x(
+            |cpu| -> () { cpu.memory[0x21FF + cpu.index_x as usize] = 0x9 },
+            0x5E, 0x21FF,
+            |cpu, val| -> u8 {
+                assert_eq!(val, 0x9 >> 1);
+                assert_eq!(cpu.get_flag_carry(), true);
+                val
+            }, 7, false
+        );
+        test_absolute_x(
+            |cpu| -> () { cpu.memory[0x2100 + cpu.index_x as usize] = 0xFF },
+            0x5E, 0x2100,
+            |cpu, val| -> u8 {
+                assert_eq!(val, 0xFF >> 1);
+                assert_eq!(cpu.get_flag_carry(), true);
+                val
+            }, 7, false
         );
     }
 }
