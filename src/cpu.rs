@@ -238,7 +238,7 @@ impl Cpu {
             0xC9 => self.execute_cmp(inst.arguments[0], 2),
             0xC5 => self.execute_cmp(self.get_addr_zero(inst.arguments[0]), 3),
             0xD5 => self.execute_cmp(self.get_addr_zero_x(inst.arguments[0]), 4),
-            0xCD => self.execute_cmp(self.get_addr_absolute(inst.get_absolute_addr()), 5),
+            0xCD => self.execute_cmp(self.get_addr_absolute(inst.get_absolute_addr()), 4),
             0xDD => self.execute_cmp(
                 self.get_addr_absolute_x(inst.get_absolute_addr()),
                 increment_if_crossed_absolute(4, inst.get_absolute_addr(), self.index_x),
@@ -254,11 +254,11 @@ impl Cpu {
             ),
 
             0xE0 => self.execute_cmx(inst.arguments[0], 2),
-            0xE4 => self.execute_cmx(self.get_addr_zero(inst.arguments[0]), 2),
+            0xE4 => self.execute_cmx(self.get_addr_zero(inst.arguments[0]), 3),
             0xEC => self.execute_cmx(self.get_addr_absolute(inst.get_absolute_addr()), 4),
 
             0xC0 => self.execute_cmy(inst.arguments[0], 2),
-            0xC4 => self.execute_cmy(self.get_addr_zero(inst.arguments[0]), 2),
+            0xC4 => self.execute_cmy(self.get_addr_zero(inst.arguments[0]), 3),
             0xCC => self.execute_cmy(self.get_addr_absolute(inst.get_absolute_addr()), 4),
 
             0xC6 => self.execute_dec(self.get_addr_zero_index(inst.arguments[0]) as u16, 5),
@@ -649,7 +649,7 @@ impl Cpu {
     fn execute_cmp(&mut self, value: u8, cycles: u32) {
         self.set_flag_carry(self.accumulator >= value);
         self.set_flag_zero(self.accumulator == value);
-        self.set_flag_negative_by_val(self.accumulator - value);
+        self.set_flag_negative(self.accumulator < value);
 
         self.cycle += cycles
     }
@@ -657,7 +657,7 @@ impl Cpu {
     fn execute_cmx(&mut self, value: u8, cycles: u32) {
         self.set_flag_carry(self.index_x >= value);
         self.set_flag_zero(self.index_x == value);
-        self.set_flag_negative_by_val(self.index_x - value);
+        self.set_flag_negative(self.index_x < value);
 
         self.cycle += cycles
     }
@@ -665,7 +665,7 @@ impl Cpu {
     fn execute_cmy(&mut self, value: u8, cycles: u32) {
         self.set_flag_carry(self.index_y >= value);
         self.set_flag_zero(self.index_y == value);
-        self.set_flag_negative_by_val(self.index_y - value);
+        self.set_flag_negative(self.index_y < value);
 
         self.cycle += cycles
     }
@@ -883,8 +883,9 @@ impl Cpu {
     /// arg points to the low byte, (arg + 1) points to the high byte.
     #[rustfmt::skip]
     fn get_addr_indirect_indexed_index(&self, arg: u8) -> usize {
-        ((((self.memory[(arg as usize + 1) & 0xFF] as u16) << 8)
-            | self.memory[arg as usize] as u16)
+        (
+            (((self.memory[(arg as usize + 1) & 0xFF] as u16) << 8)
+                | self.memory[arg as usize] as u16)
             + self.index_y as u16
         ) as usize
     }
@@ -971,7 +972,9 @@ impl Cpu {
 #[cfg(test)]
 #[rustfmt::skip]
 mod tests {
-    use crate::cpu::{Cpu, Instruction};
+use std::hint::assert_unchecked;
+use implicit_fn::implicit_fn;
+use crate::cpu::{Cpu, Instruction};
 
     //<editor-fold desc="Test Utility Methods">
     fn no_init(_: &mut Cpu) {}
@@ -1018,6 +1021,42 @@ mod tests {
             },
             op_code, [0x20, 0], 2,
             no_test, 0x0312, 4
+        );
+    }
+
+    fn test_compare<S: Fn(&mut Cpu, u8)>(op_code_im: u8, op_code_zero: u8, op_code_abs: u8, set: S) {
+        test_inst(
+            |cpu| -> () { set(cpu, 20) },
+            op_code_im, [30, 0], 2,
+            |cpu| -> () {
+                assert_eq!(cpu.get_flag_carry(), false);
+                assert_eq!(cpu.get_flag_zero(), false);
+                assert_eq!(cpu.get_flag_negative(), true);
+            }, 2, 2
+        );
+        test_inst(
+            |cpu| -> () {
+                set(cpu, 20);
+                cpu.memory[10] = 10;
+            },
+            op_code_zero, [10, 0], 2,
+            |cpu| -> () {
+                assert_eq!(cpu.get_flag_carry(), true);
+                assert_eq!(cpu.get_flag_zero(), false);
+                assert_eq!(cpu.get_flag_negative(), false);
+            }, 2, 3
+        );
+        test_inst(
+            |cpu| -> () {
+                set(cpu, 20);
+                cpu.memory[0x2457] = 20;
+            },
+            op_code_abs, [0x24, 0x57], 3,
+            |cpu| -> () {
+                assert_eq!(cpu.get_flag_carry(), true);
+                assert_eq!(cpu.get_flag_zero(), true);
+                assert_eq!(cpu.get_flag_negative(), false);
+            }, 3, 4
         );
     }
 
@@ -1157,6 +1196,101 @@ mod tests {
         );
     }
 
+    #[implicit_fn]
+    fn test_all_indirect<S, G, E>(
+        op_code_x: u8, op_code_y: u8,
+        setter: S, getter: G, expected: E, set: u8
+    ) where
+        S: Fn(&mut Cpu, u8),
+        G: Fn(&Cpu) -> u8,
+        E: Fn(u8, u8) -> u8
+    {
+        if op_code_x != 0 {
+            test_indirect_indexed(
+                |cpu| -> () { setter(cpu, set) },
+                op_code_x, 0x50,
+                |cpu, val| -> u8 {
+                    assert_eq!(getter(cpu), expected(val, set));
+                    getter(cpu)
+                }, 6
+            );
+        }
+        if op_code_y != 0 {
+            test_indexed_indirect(
+                |cpu| -> () { setter(cpu, set) },
+                op_code_y, 0x1B,
+                |cpu, val| -> u8 {
+                    assert_eq!(getter(cpu), expected(val, set));
+                    getter(cpu)
+                }, 5, false
+            );
+            test_indexed_indirect(
+                |cpu| -> () { setter(cpu, set) },
+                op_code_y, 0xC4,
+                |cpu, val| -> u8 {
+                    assert_eq!(getter(cpu), expected(val, set));
+                    getter(cpu)
+                }, 5, true
+            );
+        }
+    }
+
+    fn test_all_absolute<S, G, E>(
+            op_code_abs: u8, op_code_x: u8, op_code_y: u8,
+            setter: S, getter: G, expected: E, set: u8
+        ) where
+            S: Fn(&mut Cpu, u8),
+            G: Fn(&Cpu) -> u8,
+        E: Fn(u8, u8) -> u8
+    {
+        if op_code_abs != 0 {
+            test_absolute(
+                |cpu| -> () { setter(cpu, set) },
+                op_code_abs, 0x1145,
+                |cpu, val| -> u8 {
+                    assert_eq!(getter(cpu), expected(val, set));
+                    getter(cpu)
+                }, 4
+            );
+        }
+        if op_code_x != 0 {
+            test_absolute_x(
+                |cpu| -> () { setter(cpu, set) },
+                op_code_x, 0x1145,
+                |cpu, val| -> u8 {
+                    assert_eq!(getter(cpu), expected(val, set));
+                    getter(cpu)
+                }, 4, false
+            );
+            test_absolute_x(
+                |cpu| -> () { setter(cpu, set) },
+                op_code_x, 0x1145,
+                |cpu, val| -> u8 {
+                    assert_eq!(getter(cpu), expected(val, set));
+                    getter(cpu)
+                }, 4, true
+            );
+        }
+        if op_code_y != 0 {
+            test_absolute_y(
+                |cpu| -> () { setter(cpu, set) },
+                op_code_y, 0x1145,
+                |cpu, val| -> u8 {
+                    assert_eq!(getter(cpu), expected(val, set));
+                    getter(cpu)
+                }, 4, false
+            );
+            test_absolute_y(
+                |cpu| -> () { setter(cpu, set) },
+                op_code_y, 0x1145,
+                |cpu, val| -> u8 {
+                    assert_eq!(getter(cpu), expected(val, set));
+                    getter(cpu)
+                }, 4, true
+            );
+        }
+    }
+
     /// (Indirect,X)
     fn test_indirect_indexed<M, I>(
         init: I, op_code: u8, val: u8, check_value: M, cycles: u32
@@ -1204,6 +1338,7 @@ mod tests {
     //</editor-fold>
 
     #[test]
+    #[implicit_fn]
     fn test_adc() {
         test_immediate(
             no_init,
@@ -1235,56 +1370,21 @@ mod tests {
                 cpu.accumulator
             }, 4
         );
-        test_absolute(
-            |cpu| -> () { cpu.accumulator = 30; },
-            0x6D, 0x1145,
-            |cpu, val| -> u8 {
-                assert_eq!(cpu.accumulator, val + 30);
-                cpu.accumulator
-            }, 4
+
+        test_all_absolute(
+            0x6D, 0x7D, 0x79,
+            _.accumulator = _, _.accumulator, _ + _,
+            40
         );
-        test_absolute_x(
-            |cpu| -> () { cpu.accumulator = 10 },
-            0x7D, 0x1145,
-            |cpu, val| -> u8 {
-                assert_eq!(cpu.accumulator, val + 10);
-                cpu.accumulator
-            }, 4, false
-        );
-        test_absolute_y(
-            |cpu| -> () { cpu.accumulator = 40 },
-            0x79, 0x1145,
-            |cpu, val| -> u8 {
-                assert_eq!(cpu.accumulator, val + 40);
-                cpu.accumulator
-            }, 4, true
-        );
-        test_indirect_indexed(
-            |cpu| -> () { cpu.accumulator = 20 },
-            0x61, 0x50,
-            |cpu, val| -> u8 {
-                assert_eq!(cpu.accumulator, val + 20);
-                cpu.accumulator
-            }, 6
-        );
-        test_indexed_indirect(
-            |cpu| -> () { cpu.accumulator = 20 },
-            0x71, 0x10,
-            |cpu, val| -> u8 {
-                assert_eq!(cpu.accumulator, val + 20);
-                cpu.accumulator
-            }, 5, false
-        );test_indexed_indirect(
-            |cpu| -> () { cpu.accumulator = 20 },
-            0x71, 0xBA,
-            |cpu, val| -> u8 {
-                assert_eq!(cpu.accumulator, val + 20);
-                cpu.accumulator
-            }, 5, true
-        );
+        test_all_indirect(
+            0x61, 0x71,
+            _.accumulator = _, _.accumulator, _ + _,
+            40
+        )
     }
 
     #[test]
+    #[implicit_fn]
     fn test_and() {
         test_immediate(
             no_init,
@@ -1310,53 +1410,16 @@ mod tests {
                 cpu.accumulator
             }, 4
         );
-        test_absolute(
-            |cpu| -> () { cpu.accumulator = 0x12 },
-            0x2D, 0xACDB,
-            |cpu, val| -> u8 {
-                assert_eq!(cpu.accumulator, val & 0x12);
-                cpu.accumulator
-            }, 4
+
+        test_all_absolute(
+            0x2D, 0x3D, 0x39,
+            _.accumulator = _, _.accumulator, _ & _,
+            0x40
         );
-        test_absolute_x(
-            |cpu| -> () { cpu.accumulator = 0x21; },
-            0x3D, 0xBA2B,
-            |cpu, val| -> u8 {
-                assert_eq!(cpu.accumulator, val & 0x21);
-                cpu.accumulator
-            }, 4, false
-        );
-        test_absolute_y(
-            |cpu| -> () { cpu.accumulator = 0x21; },
-            0x39, 0xBAFB,
-            |cpu, val| -> u8 {
-                assert_eq!(cpu.accumulator, val & 0x21);
-                cpu.accumulator
-            }, 4, true
-        );
-        test_indirect_indexed(
-            |cpu| -> () { cpu.accumulator = 0x72; },
-            0x21, 0x00,
-            |cpu, val| -> u8 {
-                assert_eq!(cpu.accumulator, val & 0x72);
-                cpu.accumulator
-            }, 6
-        );
-        test_indexed_indirect(
-            |cpu| -> () { cpu.accumulator = 0xF2; },
-            0x31, 0xF0,
-            |cpu, val| -> u8 {
-                assert_eq!(cpu.accumulator, val & 0xF2);
-                cpu.accumulator
-            }, 5, true
-        );
-        test_indexed_indirect(
-            |cpu| -> () { cpu.accumulator = 0xA2; },
-            0x31, 0x20,
-            |cpu, val| -> u8 {
-                assert_eq!(cpu.accumulator, val & 0xA2);
-                cpu.accumulator
-            }, 5, false
+        test_all_indirect(
+            0x21, 0x31,
+            _.accumulator = _, _.accumulator, _ & _,
+            251
         );
     }
 
@@ -1564,5 +1627,99 @@ mod tests {
     #[test]
     fn test_clv() {
         test_set(0xB8, Cpu::set_flag_overflow, Cpu::get_flag_overflow, false);
+    }
+
+    #[test]
+    #[implicit_fn]
+    fn test_cmp() {
+        test_compare(
+            0xC9, 0xC5, 0xCD,
+            _.accumulator = _
+        );
+
+        test_zero_page_x(
+            _.accumulator = 20,
+            0xD5, 0xF0,
+            |cpu, _| -> u8 {
+                assert_eq!(cpu.get_flag_carry(), true);
+                1
+            }, 4
+        );
+
+        test_absolute_x(
+            _.accumulator = 0,
+            0xDD, 0x20,
+            |cpu, _| -> u8 {
+                assert_eq!(cpu.get_flag_carry(), false);
+                0x80
+            }, 4, false
+        );
+        test_absolute_x(
+            _.accumulator = 0,
+            0xDD, 0xF0,
+            |cpu, _| -> u8 {
+                assert_eq!(cpu.get_flag_carry(), false);
+                0x80
+            }, 4, true
+        );
+        test_absolute_y(
+            _.accumulator = 0x10,
+            0xD9, 0x20,
+            |cpu, _| -> u8 {
+                assert_eq!(cpu.get_flag_carry(), true);
+                0
+            }, 4, false
+        );
+        test_absolute_y(
+            _.accumulator = 0x10,
+            0xD9, 0xF0,
+            |cpu, _| -> u8 {
+                assert_eq!(cpu.get_flag_carry(), true);
+                0
+            }, 4, true
+        );
+
+        test_indirect_indexed(
+            _.accumulator = 250,
+            0xC1, 0x21,
+            |cpu, _| -> u8 {
+                assert_eq!(cpu.get_flag_carry(), true);
+                1
+            }, 6
+        );
+        test_indexed_indirect(
+            _.accumulator = 5,
+            0xD1, 0x26,
+            |cpu, _| -> u8 {
+                assert_eq!(cpu.get_flag_carry(), false);
+                0x80
+            }, 5, false
+        );
+        test_indexed_indirect(
+            _.accumulator = 0x75,
+            0xD1, 0x26,
+            |cpu, _| -> u8 {
+                assert_eq!(cpu.get_flag_carry(), true);
+                1
+            }, 5, true
+        );
+    }
+
+    #[test]
+    #[implicit_fn]
+    fn test_cmx() {
+        test_compare(
+            0xE0, 0xE4, 0xEC,
+            _.index_x = _
+        );
+    }
+
+    #[test]
+    #[implicit_fn]
+    fn test_cmy() {
+        test_compare(
+            0xC0, 0xC4, 0xCC,
+            _.index_y = _
+        );
     }
 }
