@@ -595,9 +595,7 @@ impl Cpu {
     }
 
     fn execute_adc(&mut self, memory: u8, cycles: u32) {
-        let result: u16 = self.accumulator as u16
-            + memory as u16
-            + (if self.get_flag_carry() { 1 } else { 0 }) as u16;
+        let result: u16 = self.accumulator as u16 + memory as u16 + self.get_flag_carry() as u16;
         self.set_flag_carry_by_val(result);
         self.set_flag_zero_by_val(result as u8);
         self.set_flag_overflow(
@@ -764,14 +762,7 @@ impl Cpu {
     }
 
     fn execute_sbc(&mut self, value: u8, cycles: u32) {
-        let acc: u8 = self.accumulator;
-        let result: i16 = acc as i16 + (!value) as i16 + (self.get_flag_carry() as u8) as i16;
-        self.accumulator = (result & 0xFF) as u8;
-        self.set_flag_carry(!(result < 0));
-        self.set_flag_zero(result == 0);
-        self.set_flag_overflow((result ^ acc as i16) & (result & !value as i16) & 0x80 == 0x80);
-        self.set_flag_negative_by_val(self.accumulator);
-        self.cycle += cycles;
+        self.execute_adc(value ^ 0xFF, cycles)
     }
 
     fn execute_st(&mut self, addr: u16, value: u8, cycles: u32) {
@@ -2501,5 +2492,49 @@ use crate::cpu::{Cpu, Instruction};
             |cpu| assert_eq!(cpu.stack_pointer, 0xFF),
             0xAB12, 6
         )
+    }
+
+    #[test]
+    fn test_sbc() {
+        test_all(
+            0xE9,
+            0xE5, 0xF5, 0,
+            0xED, 0xFD, 0xF9,
+            0xE1, 0xF1,
+            |cpu, val| cpu.accumulator = val,
+            |cpu| cpu.accumulator,
+            |val, set| -> u8 {
+                let result: i16 = (set as i16 & 0xFF) + (!val as i16 & 0xFF) + 0i16 & 0xFF;
+                (result.cast_unsigned() & 0xFF) as u8
+            }, 20
+        );
+    }
+
+    #[test]
+    fn test_sec() {
+        test_set(0x38, Cpu::set_flag_carry, Cpu::get_flag_carry, true);
+    }
+
+    #[test]
+    fn test_sed() {
+        test_set(0xF8, Cpu::set_flag_decimal, Cpu::get_flag_decimal, true);
+    }
+
+    #[test]
+    fn test_sei() {
+        test_inst(
+            no_init,
+            0x78, [0, 0], 1,
+            |cpu| -> () {
+                // The effects of this instruction are delayed by one instruction
+                assert_eq!(cpu.get_flag_interrupt(), false);
+                assert_eq!(cpu.change_interrupt_disable_flag, 1);
+
+                cpu.execute_instruction(&Instruction::new(0xEA, [0, 0], 1));
+
+                assert_eq!(cpu.get_flag_interrupt(), true);
+                assert_eq!(cpu.change_interrupt_disable_flag, -1);
+            }, 1, 2
+        );
     }
 }
