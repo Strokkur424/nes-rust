@@ -454,7 +454,7 @@ impl Cpu {
             0x76 => self.execute_ror(
                 self.get_addr_zero_x(inst.arguments[0]),
                 |cpu, r| -> () { cpu.set_addr_zero_x(inst.arguments[0], r) },
-                5,
+                6,
             ),
             0x6E => self.execute_ror(
                 self.get_addr_absolute(inst.get_absolute_addr()),
@@ -464,7 +464,7 @@ impl Cpu {
             0x7E => self.execute_ror(
                 self.get_addr_absolute_x(inst.get_absolute_addr()),
                 |cpu, r| -> () { cpu.set_addr_absolute_x(inst.get_absolute_addr(), r) },
-                6,
+                7,
             ),
 
             0xE9 => self.execute_sbc(inst.arguments[0], 2),
@@ -2352,5 +2352,154 @@ use crate::cpu::{Cpu, Instruction};
                 assert_eq!(cpu.get_flag_interrupt(), true); // the flag was delayed
             }, 1, 4
         );
+    }
+
+    #[test]
+    fn test_rol() {
+        test_accumulator(
+            0x2A, 0b1101_0011,
+            |cpu, val| -> u8 {
+                let expected = 0b1010_0110;
+                assert_eq!(val, expected);
+                assert_eq!(cpu.get_flag_carry(), true);
+                val
+            }, 2
+        );
+        test_zero_page(
+            |cpu| cpu.set_flag_carry(true),
+            0x26, 0x21,
+            |cpu, val| -> u8 {
+                assert_eq!(val, (0x10 << 1) | 1);
+                assert_eq!(cpu.get_flag_carry(), false);
+                val
+            }, 5
+        );
+        test_zero_page_x(
+            no_init,
+            0x16, 0x21,
+            |cpu, val| -> u8 {
+                assert_eq!(val, 0x10 << 1);
+                assert_eq!(cpu.get_flag_carry(), false);
+                val
+            }, 6
+        );
+        test_absolute(
+            no_init,
+            0x0E, 0x2112,
+            |cpu, val| -> u8 {
+                assert_eq!(val, 0x10 << 1);
+                assert_eq!(cpu.get_flag_carry(), false);
+                val
+            }, 6
+        );
+        test_absolute_x(
+            no_init,
+            0x1E, 0x21FF,
+            |cpu, val| -> u8 {
+                assert_eq!(val, 0x10 << 1);
+                assert_eq!(cpu.get_flag_carry(), false);
+                val
+            }, 7, false
+        );
+        test_absolute_x(
+            no_init,
+            0x1E, 0x2100,
+            |cpu, val| -> u8 {
+                assert_eq!(val, 0x10 << 1);
+                assert_eq!(cpu.get_flag_carry(), false);
+                val
+            }, 7, false
+        );
+    }
+
+    #[test]
+    fn test_ror() {
+        test_accumulator(
+            0x6A, 0b1101_0011,
+            |cpu, val| -> u8 {
+                let expected = 0b0110_1001;
+                assert_eq!(val, expected);
+                assert_eq!(cpu.get_flag_carry(), true);
+                val
+            }, 2
+        );
+        test_zero_page(
+            |cpu| cpu.set_flag_carry(true),
+            0x66, 0x21,
+            |cpu, val| -> u8 {
+                assert_eq!(val, (0x10 >> 1) | 0x80);
+                assert_eq!(cpu.get_flag_carry(), false);
+                val
+            }, 5
+        );
+        test_zero_page_x(
+            no_init,
+            0x76, 0x21,
+            |cpu, val| -> u8 {
+                assert_eq!(val, 0x10 >> 1);
+                assert_eq!(cpu.get_flag_carry(), false);
+                val
+            }, 6
+        );
+        test_absolute(
+            no_init,
+            0x6E, 0x2112,
+            |cpu, val| -> u8 {
+                assert_eq!(val, 0x10 >> 1);
+                assert_eq!(cpu.get_flag_carry(), false);
+                val
+            }, 6
+        );
+        test_absolute_x(
+            no_init,
+            0x7E, 0x21FF,
+            |cpu, val| -> u8 {
+                assert_eq!(val, 0x10 >> 1);
+                assert_eq!(cpu.get_flag_carry(), false);
+                val
+            }, 7, false
+        );
+        test_absolute_x(
+            no_init,
+            0x7E, 0x2100,
+            |cpu, val| -> u8 {
+                assert_eq!(val, 0x10 >> 1);
+                assert_eq!(cpu.get_flag_carry(), false);
+                val
+            }, 7, false
+        );
+    }
+
+    #[test]
+    fn test_rti() {
+        test_inst(
+            |cpu| -> () {
+                cpu.push(0xAB);
+                cpu.push(0x11);
+                cpu.push(0b00110101);
+            },
+            0x40, [0, 0], 1,
+            |cpu| -> () {
+                assert_eq!(cpu.stack_pointer, 0xFF);
+                assert_eq!(cpu.get_flag_carry(), true);
+
+                // Interrupt flag is __not__ delayed
+                assert_eq!(cpu.change_interrupt_disable_flag, -1);
+                assert_eq!(cpu.get_flag_interrupt(), true);
+            }, 0xAB11, 6
+        )
+    }
+
+    #[test]
+    fn test_rts() {
+        test_inst(
+            |cpu| -> () {
+                cpu.push(0xAB);
+                cpu.push(0x11);
+            },
+            0x60, [0, 0], 1,
+            |cpu| assert_eq!(cpu.stack_pointer, 0xFF),
+            0xAB12, 6
+        )
     }
 }
