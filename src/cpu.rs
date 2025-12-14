@@ -568,8 +568,8 @@ impl Cpu {
             }
             0xBA => {
                 self.index_x = self.stack_pointer;
-                self.set_flag_zero_by_val(self.index_y);
-                self.set_flag_negative_by_val(self.index_y);
+                self.set_flag_zero_by_val(self.index_x);
+                self.set_flag_negative_by_val(self.index_x);
                 self.cycle += 2;
             }
             0x8A => {
@@ -836,7 +836,7 @@ impl Cpu {
         self.memory[self.get_addr_zero_y_index(arg) as usize]
     }
     fn get_addr_zero_y_index(&self, arg: u8) -> u8 {
-        (arg + self.index_y) % 0xFF
+        (((arg as u16 & 0xFF) + (self.index_y as u16 & 0xFF)) % 0xFF) as u8
     }
     fn set_addr_zero_x(&mut self, arg: u8, value: u8) {
         self.memory[self.get_addr_zero_x_index(arg) as usize] = value
@@ -969,8 +969,6 @@ impl Cpu {
 #[cfg(test)]
 #[rustfmt::skip]
 mod tests {
-use std::hint::assert_unchecked;
-use std::ops::Deref;
 use implicit_fn::implicit_fn;
 use crate::cpu::{Cpu, Instruction};
 
@@ -1147,11 +1145,11 @@ use crate::cpu::{Cpu, Instruction};
         test_inst(
             |cpu| -> () {
                 cpu.index_y = 10;
-                cpu.memory[val as usize + cpu.index_y as usize] = 0x10;
+                cpu.memory[((val as usize & 0xFF) + (cpu.index_y as usize & 0xFF)) % 0xFF] = 0x10;
                 init(cpu);
             },
             op_code, [val, 0x00], 2,
-            |cpu| -> () { test_zero_negative(cpu, check_value(cpu, cpu.memory[val as usize + cpu.index_y as usize])) },
+            |cpu| -> () { test_zero_negative(cpu, check_value(cpu, cpu.memory[((val as usize & 0xFF) + (cpu.index_y as usize & 0xFF)) % 0xFF])) },
             2, cycles
         );
     }
@@ -2534,6 +2532,183 @@ use crate::cpu::{Cpu, Instruction};
 
                 assert_eq!(cpu.get_flag_interrupt(), true);
                 assert_eq!(cpu.change_interrupt_disable_flag, -1);
+            }, 1, 2
+        );
+    }
+
+    #[test]
+    fn test_sta() {
+        let test = |cpu: &Cpu, val: u8| -> u8 {
+            assert_eq!(val, cpu.accumulator);
+            1
+        };
+
+        test_zero_page(
+            |cpu| cpu.accumulator = 20,
+            0x85, 52,
+            test, 3
+        );
+        test_zero_page_x(
+            |cpu| cpu.accumulator = 0xFF,
+            0x95, 122,
+            test, 4
+        );
+        test_absolute(
+            |cpu| cpu.accumulator = 1,
+            0x8D, 12232,
+            test, 4
+        );
+        test_absolute_x(
+            |cpu| cpu.accumulator = 0xFF,
+            0x9D, 0xABFF,
+            test, 5, false
+        );
+        test_absolute_x(
+            |cpu| cpu.accumulator = 0xAF,
+            0x9D, 0xAB00,
+            test, 5, false
+        );
+        test_absolute_y(
+            |cpu| cpu.accumulator = 0xFA,
+            0x99, 0xABFF,
+            test, 5, false
+        );
+        test_absolute_y(
+            |cpu| cpu.accumulator = 0xAC,
+            0x99, 0xAB00,
+            test, 5, false
+        );
+        test_indirect_indexed(
+            |cpu| cpu.accumulator = 16,
+            0x81, 0xCD,
+            test, 6
+        );
+        test_indexed_indirect(
+            |cpu| cpu.accumulator = 27,
+            0x91, 0xAB,
+            test, 6, false
+        );
+        test_indexed_indirect(
+            |cpu| cpu.accumulator = 77,
+            0x91, 0xD8,
+            test, 6, false
+        );
+    }
+
+    #[test]
+    fn test_stx() {
+        let test = |cpu: &Cpu, val: u8| -> u8 {
+            assert_eq!(val, cpu.index_x);
+            1
+        };
+
+        test_zero_page(
+            |cpu| cpu.index_x = 20,
+            0x86, 52,
+            test, 3
+        );
+        test_zero_page_y(
+            |cpu| cpu.index_x = 0xFF,
+            0x96, 122,
+            test, 4
+        );
+        test_absolute(
+            |cpu| cpu.index_x = 1,
+            0x8E, 12232,
+            test, 4
+        );
+    }
+
+    #[test]
+    fn test_sty() {
+        let test = |cpu: &Cpu, val: u8| -> u8 {
+            assert_eq!(val, cpu.index_y);
+            1
+        };
+
+        test_zero_page(
+            |cpu| cpu.index_y = 20,
+            0x84, 52,
+            test, 3
+        );
+        test_zero_page_y(
+            |cpu| cpu.index_y = 0xFF,
+            0x94, 122,
+            test, 4
+        );
+        test_absolute(
+            |cpu| cpu.index_y = 1,
+            0x8C, 12232,
+            test, 4
+        );
+    }
+
+    #[test]
+    fn test_tax() {
+        test_inst(
+            |cpu| cpu.accumulator = 0x69,
+            0xAA, [0, 0], 1,
+            |cpu| -> () {
+                assert_eq!(cpu.index_x, cpu.accumulator);
+                test_zero_negative(cpu, cpu.index_x);
+            }, 1, 2
+        );
+    }
+
+    #[test]
+    fn test_tay() {
+        test_inst(
+            |cpu| cpu.accumulator = 0xAB,
+            0xA8, [0, 0], 1,
+            |cpu| -> () {
+                assert_eq!(cpu.index_y, cpu.accumulator);
+                test_zero_negative(cpu, cpu.index_y);
+            }, 1, 2
+        );
+    }
+
+    #[test]
+    fn test_tsx() {
+        test_inst(
+            |cpu| cpu.stack_pointer = 0xAB,
+            0xBA, [0, 0], 1,
+            |cpu| -> () {
+                assert_eq!(cpu.index_x, cpu.stack_pointer);
+                test_zero_negative(cpu, cpu.index_x);
+            }, 1, 2
+        );
+    }
+
+    #[test]
+    fn test_txa() {
+        test_inst(
+            |cpu| cpu.index_x = 0xB7,
+            0x8A, [0, 0], 1,
+            |cpu| -> () {
+                assert_eq!(cpu.accumulator, cpu.index_x);
+                test_zero_negative(cpu, cpu.accumulator);
+            }, 1, 2
+        );
+    }
+
+    #[test]
+    fn test_txs() {
+        test_inst(
+            |cpu| cpu.index_x = 0x0F,
+            0x9A, [0, 0], 1,
+            |cpu| assert_eq!(cpu.stack_pointer, cpu.index_x),
+            1, 2
+        );
+    }
+
+    #[test]
+    fn test_tya() {
+        test_inst(
+            |cpu| cpu.index_y = 0x01,
+            0x98, [0, 0], 1,
+            |cpu| -> () {
+                assert_eq!(cpu.accumulator, cpu.index_y);
+                test_zero_negative(cpu, cpu.accumulator);
             }, 1, 2
         );
     }
